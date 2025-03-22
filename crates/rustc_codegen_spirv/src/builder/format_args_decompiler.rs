@@ -88,7 +88,7 @@ impl<'tcx> DecodedFormatArgs<'tcx> {
         };
         let array_len_from_ptr_type = |ptr_ty_id: Word| {
             let pointee_ty_id = match cx.lookup_type(ptr_ty_id) {
-                SpirvType::Pointer { pointee } => pointee,
+                SpirvType::Pointer { pointee, .. } => pointee,
                 _ => return None,
             };
             let count = match cx.lookup_type(pointee_ty_id) {

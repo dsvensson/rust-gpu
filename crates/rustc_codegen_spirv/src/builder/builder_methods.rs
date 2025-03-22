@@ -621,17 +621,18 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         size: Size,
     ) -> Option<(SpirvValue, <Self as BackendTypes>::Type)> {
         let ptr = ptr.strip_ptrcasts();
-        let mut leaf_ty = match self.lookup_type(ptr.ty) {
-            SpirvType::Pointer { pointee } => pointee,
+        let pointee_ty = match self.lookup_type(ptr.ty) {
+            SpirvType::Pointer { pointee, .. } => pointee,
             other => self.fatal(format!("`ptr` is non-pointer type: {other:?}")),
         };
 
         trace!(
-            "before nested adjust_pointer_for_sized_access. `leaf_ty`: {}",
-            self.debug_type(leaf_ty)
+            "before nested adjust_pointer_for_sized_access. `pointee_ty`: {}",
+            self.debug_type(pointee_ty)
         );
 
         let mut indices = SmallVec::<[_; 8]>::new();
+        let mut leaf_ty = pointee_ty;
         while let Some((inner_indices, inner_ty)) = self.recover_access_chain_from_offset(
             leaf_ty,
             Size::ZERO,
@@ -650,7 +651,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         let leaf_ptr_ty = (self.lookup_type(leaf_ty).sizeof(self) == Some(size))
             .then(|| self.type_ptr_to(leaf_ty))?;
         let leaf_ptr = if indices.is_empty() {
-            assert_ty_eq!(self, ptr.ty, leaf_ptr_ty);
+            // Compare pointee types instead of pointer  types as storage class might be different.
+            assert_ty_eq!(self, pointee_ty, leaf_ty);
             ptr
         } else {
             let indices = indices
@@ -914,7 +916,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             // a whole `OpVariable`, or the result of a previous `OpAccessChain`).
             let original_ptr = ptr.strip_ptrcasts();
             let original_pointee_ty = match self.lookup_type(original_ptr.ty) {
-                SpirvType::Pointer { pointee } => pointee,
+                SpirvType::Pointer { pointee, .. } => pointee,
                 other => self.fatal(format!("pointer arithmetic on non-pointer type {other:?}")),
             };
 
@@ -2410,6 +2412,25 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
             return ptr;
         }
 
+        // No cast is needed if only the storage class mismatches.
+        let ptr_pointee = match self.lookup_type(ptr.ty) {
+            SpirvType::Pointer { pointee, .. } => pointee,
+            other => self.fatal(format!(
+                "pointercast called on non-pointer source type: {other:?}"
+            )),
+        };
+        let dest_pointee = match self.lookup_type(dest_ty) {
+            SpirvType::Pointer { pointee, .. } => pointee,
+            other => self.fatal(format!(
+                "pointercast called on non-pointer dest type: {other:?}"
+            )),
+        };
+
+        // FIXME(jwollen) Do we need to choose `dest_ty` if it has a fixed storage class and `ptr` has none?
+        if ptr_pointee == dest_pointee {
+            return ptr;
+        }
+
         // Strip a previous `pointercast`, to reveal the original pointer type.
         let ptr = ptr.strip_ptrcasts();
 
@@ -2423,17 +2444,16 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
         }
 
         let ptr_pointee = match self.lookup_type(ptr.ty) {
-            SpirvType::Pointer { pointee } => pointee,
+            SpirvType::Pointer { pointee, .. } => pointee,
             other => self.fatal(format!(
                 "pointercast called on non-pointer source type: {other:?}"
             )),
         };
-        let dest_pointee = match self.lookup_type(dest_ty) {
-            SpirvType::Pointer { pointee } => pointee,
-            other => self.fatal(format!(
-                "pointercast called on non-pointer dest type: {other:?}"
-            )),
-        };
+
+        if ptr_pointee == dest_pointee {
+            return ptr;
+        }
+
         let dest_pointee_size = self.lookup_type(dest_pointee).sizeof(self);
 
         if let Some((indices, _)) = self.recover_access_chain_from_offset(
@@ -2914,7 +2934,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
             .and_then(|size| Some(Size::from_bytes(u64::try_from(size).ok()?)));
 
         let elem_ty = match self.lookup_type(ptr.ty) {
-            SpirvType::Pointer { pointee } => pointee,
+            SpirvType::Pointer { pointee, .. } => pointee,
             _ => self.fatal(format!(
                 "memset called on non-pointer type: {}",
                 self.debug_type(ptr.ty)
@@ -3285,7 +3305,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
         // be fixed upstream, so we never see any "function pointer" values being
         // created just to perform direct calls.
         let (callee_val, result_type, argument_types) = match self.lookup_type(callee.ty) {
-            SpirvType::Pointer { pointee } => {
+            SpirvType::Pointer { pointee, .. } => {
                 let (pointee_is_function, result_type, argument_types) = match self
                     .lookup_type(pointee)
                 {

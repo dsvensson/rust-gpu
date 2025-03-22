@@ -130,7 +130,7 @@ impl<'a, 'tcx> AsmBuilderMethods<'tcx> for Builder<'a, 'tcx> {
                 && let OperandValue::Immediate(in_value_spv) = &mut in_value.val
             {
                 if let SpirvValueKind::FnAddr { function } = in_value_spv.kind
-                    && let SpirvType::Pointer { pointee } = self.lookup_type(in_value_spv.ty)
+                    && let SpirvType::Pointer { pointee, .. } = self.lookup_type(in_value_spv.ty)
                 {
                     // reference to function pointer must be unwrapped from its pointer to be used in calls
                     *in_value_spv = function.with_type(pointee);
@@ -403,19 +403,14 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
             }
             .def(self.span(), self),
             Op::TypePointer => {
-                let storage_class = inst.operands[0].unwrap_storage_class();
-                if storage_class != StorageClass::Generic {
-                    self.struct_err("TypePointer in asm! requires `Generic` storage class")
-                        .with_note(format!(
-                            "`{storage_class:?}` storage class was specified"
-                        ))
-                        .with_help(format!(
-                            "the storage class will be inferred automatically (e.g. to `{storage_class:?}`)"
-                        ))
-                        .emit();
-                }
+                // The storage class can be specified explicitly or inferred later by using StorageClass::Generic.
+                let storage_class = match inst.operands[0].unwrap_storage_class() {
+                    StorageClass::Generic => None,
+                    storage_class => Some(storage_class),
+                };
                 SpirvType::Pointer {
                     pointee: inst.operands[1].unwrap_id_ref(),
+                    storage_class,
                 }
                 .def(self.span(), self)
             }
@@ -774,6 +769,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
 
                 TyPat::Pointer(_, pat) => SpirvType::Pointer {
                     pointee: subst_ty_pat(cx, pat, ty_vars, leftover_operands)?,
+                    storage_class: None,
                 }
                 .def(DUMMY_SP, cx),
 
@@ -1023,7 +1019,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                     Some(match kind {
                         TypeofKind::Plain => ty,
                         TypeofKind::Dereference => match self.lookup_type(ty) {
-                            SpirvType::Pointer { pointee } => pointee,
+                            SpirvType::Pointer { pointee, .. } => pointee,
                             other => {
                                 self.tcx.dcx().span_err(
                                     span,
@@ -1045,7 +1041,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                     self.check_reg(span, reg);
                     if let Some(place) = place {
                         match self.lookup_type(place.val.llval.ty) {
-                            SpirvType::Pointer { pointee } => Some(pointee),
+                            SpirvType::Pointer { pointee, .. } => Some(pointee),
                             other => {
                                 self.tcx.dcx().span_err(
                                     span,

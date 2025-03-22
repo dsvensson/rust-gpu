@@ -349,7 +349,7 @@ impl<'tcx> CodegenCx<'tcx> {
             && let Some(SpirvConst::PtrTo { pointee }) = self.builder.lookup_const(val)
             && let Some(SpirvConst::ConstDataFromAlloc(alloc)) =
                 self.builder.lookup_const_by_id(pointee)
-            && let SpirvType::Pointer { pointee } = self.lookup_type(ty)
+            && let SpirvType::Pointer { pointee, .. } = self.lookup_type(ty)
             && let Some(init) = self.try_read_from_const_alloc(alloc, pointee)
         {
             return self.def_constant(
