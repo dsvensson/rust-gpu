@@ -221,6 +221,7 @@ impl<'tcx> RecursivePointeeCache<'tcx> {
                 PointeeDefState::Defining => {
                     let id = SpirvType::Pointer {
                         pointee: pointee_spv,
+                        storage_class: None, // TODO(jwollen): Do we need to cache by storage class?
                     }
                     .def(span, cx);
                     entry.insert(PointeeDefState::Defined(id));
@@ -232,6 +233,7 @@ impl<'tcx> RecursivePointeeCache<'tcx> {
                     entry.insert(PointeeDefState::Defined(id));
                     SpirvType::Pointer {
                         pointee: pointee_spv,
+                        storage_class: None, // TODO(jwollen): Do we need to cache by storage class?
                     }
                     .def_with_id(cx, span, id)
                 }
