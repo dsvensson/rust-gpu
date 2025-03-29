@@ -477,7 +477,18 @@ impl<'tcx> BuilderSpirv<'tcx> {
         }
         // The linker will always be ran on this module
         builder.capability(Capability::Linkage);
-        builder.memory_model(AddressingModel::Logical, memory_model);
+
+        // Physical storage buffer addressing implies a 64-bit physical address
+        // space, so switch the module's addressing model accordingly. The
+        // application guarantees the capability is enabled when it uses it.
+        let addressing_model = if features.contains(&TargetFeature::Capability(
+            Capability::PhysicalStorageBufferAddresses,
+        )) {
+            AddressingModel::PhysicalStorageBuffer64
+        } else {
+            AddressingModel::Logical
+        };
+        builder.memory_model(addressing_model, memory_model);
 
         Self {
             source_map: tcx.sess.source_map(),
