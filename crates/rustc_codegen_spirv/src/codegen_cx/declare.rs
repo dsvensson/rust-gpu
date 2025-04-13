@@ -6,7 +6,7 @@ use crate::abi::ConvSpirvType;
 use crate::attr::AggregatedSpirvAttributes;
 use crate::builder_spirv::{SpirvConst, SpirvFunctionCursor, SpirvValue, SpirvValueExt};
 use crate::custom_decorations::{CustomDecoration, SrcLocDecoration};
-use crate::spirv_type::SpirvType;
+use crate::spirv_type::{SpirvType, StorageClassKind};
 use itertools::Itertools;
 use rspirv::spirv::{FunctionControl, LinkageType, StorageClass, Word};
 use rustc_codegen_ssa::traits::{PreDefineCodegenMethods, StaticCodegenMethods};
@@ -349,7 +349,7 @@ impl<'tcx> CodegenCx<'tcx> {
         // Could be explicitly StorageClass::Private but is inferred anyway.
         let ptr_ty = SpirvType::Pointer {
             pointee: ty,
-            storage_class: None,
+            storage_class: StorageClassKind::Inferred,
         }
         .def(span, self);
         // FIXME(eddyb) figure out what the correct storage class is.

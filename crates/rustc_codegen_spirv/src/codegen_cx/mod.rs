@@ -8,7 +8,7 @@ use crate::builder_spirv::{
     BuilderSpirv, SpirvBlockCursor, SpirvConst, SpirvFunctionCursor, SpirvValue, SpirvValueKind,
 };
 use crate::custom_decorations::{CustomDecoration, SrcLocDecoration, ZombieDecoration};
-use crate::spirv_type::{SpirvType, SpirvTypePrinter, TypeCache};
+use crate::spirv_type::{SpirvType, SpirvTypePrinter, StorageClassKind, TypeCache};
 use crate::symbols::Symbols;
 
 // HACK(eddyb) avoids rewriting all of the imports (see `lib.rs` and `build.rs`).
@@ -270,7 +270,7 @@ impl<'tcx> CodegenCx<'tcx> {
     pub fn type_ptr_to(&self, ty: Word) -> Word {
         SpirvType::Pointer {
             pointee: ty,
-            storage_class: None,
+            storage_class: StorageClassKind::Inferred,
         }
         .def(DUMMY_SP, self)
     }
@@ -278,7 +278,7 @@ impl<'tcx> CodegenCx<'tcx> {
     pub fn type_ptr_to_ext(&self, ty: Word, _address_space: AddressSpace) -> Word {
         SpirvType::Pointer {
             pointee: ty,
-            storage_class: None,
+            storage_class: StorageClassKind::Inferred,
         }
         .def(DUMMY_SP, self)
     }
@@ -904,7 +904,7 @@ impl<'tcx> MiscCodegenMethods<'tcx> for CodegenCx<'tcx> {
 
         let ty = SpirvType::Pointer {
             pointee: function.ty,
-            storage_class: None,
+            storage_class: StorageClassKind::Inferred,
         }
         .def(span, self);
 
