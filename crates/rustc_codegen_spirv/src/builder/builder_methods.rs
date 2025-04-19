@@ -9,7 +9,7 @@ use crate::builder_spirv::{
 };
 use crate::codegen_cx::CodegenCx;
 use crate::custom_insts::CustomInst;
-use crate::spirv_type::SpirvType;
+use crate::spirv_type::{SpirvType, StorageClassKind};
 use itertools::Itertools;
 use rspirv::dr::{InsertPoint, Instruction, Operand};
 use rspirv::spirv::{MemoryModel, MemorySemantics, Op, Scope, StorageClass, Word};
@@ -583,11 +583,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
     #[instrument(level = "trace", skip(self))]
     fn zombie_convert_ptr_to_u(&self, def: Word) {
         self.zombie(def, "cannot convert pointers to integers");
-    }
-
-    #[instrument(level = "trace", skip(self))]
-    fn zombie_convert_u_to_ptr(&self, def: Word) {
-        self.zombie(def, "cannot convert integers to pointers");
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -2176,21 +2171,26 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
     }
 
     fn inttoptr(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value {
-        match self.lookup_type(dest_ty) {
-            SpirvType::Pointer { .. } => (),
+        let result_ty = match self.lookup_type(dest_ty) {
+            SpirvType::Pointer { pointee, .. } => SpirvType::Pointer {
+                pointee,
+                storage_class: StorageClassKind::Explicit(StorageClass::PhysicalStorageBuffer),
+            }
+            .def(self.span(), self),
             other => self.fatal(format!(
                 "inttoptr called on non-pointer dest type: {other:?}"
             )),
-        }
-        if val.ty == dest_ty {
+        };
+        if val.ty == result_ty {
             val
         } else {
             let result = self
                 .emit()
-                .convert_u_to_ptr(dest_ty, None, val.def(self))
+                .convert_u_to_ptr(result_ty, None, val.def(self))
                 .unwrap()
-                .with_type(dest_ty);
-            self.zombie_convert_u_to_ptr(result.def(self));
+                .with_type(result_ty);
+            // Physical storage buffer addressing is assumed to be enabled by
+            // the application, so integer→pointer conversion is legal.
             result
         }
     }
