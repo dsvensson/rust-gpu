@@ -191,17 +191,23 @@ impl SpirvValue {
                 original_ptr_ty,
                 bitcast_result_id,
             } => {
-                cx.zombie_with_span(
-                    bitcast_result_id,
-                    span,
-                    &format!(
-                        "cannot cast between pointer types\
-                         \nfrom `{}`\
-                         \n  to `{}`",
-                        cx.debug_type(original_ptr_ty),
-                        cx.debug_type(self.ty)
-                    ),
-                );
+                // With physical storage buffer addressing the cast is deferred
+                // (storage-class inference can legalize it); without it, the
+                // cast is illegal in the logical addressing model, so reject it
+                // eagerly with a clear diagnostic.
+                if !cx.builder.physical_storage_buffer_addresses {
+                    cx.zombie_with_span(
+                        bitcast_result_id,
+                        span,
+                        &format!(
+                            "cannot cast between pointer types\
+                             \nfrom `{}`\
+                             \n  to `{}`",
+                            cx.debug_type(original_ptr_ty),
+                            cx.debug_type(self.ty)
+                        ),
+                    );
+                }
 
                 bitcast_result_id
             }
@@ -441,6 +447,12 @@ pub struct BuilderSpirv<'tcx> {
     id_to_const: RefCell<FxHashMap<Word, WithConstLegality<SpirvConst<'tcx, 'tcx>>>>,
 
     debug_file_cache: RefCell<FxHashMap<DebugFileKey, DebugFileSpirv<'tcx>>>,
+
+    /// Whether the target enables the `PhysicalStorageBufferAddresses`
+    /// capability. When set, pointer casts that can't be resolved logically are
+    /// deferred to storage-class inference (which can legalize them for
+    /// physical pointers); otherwise they're rejected eagerly.
+    physical_storage_buffer_addresses: bool,
 }
 
 impl<'tcx> BuilderSpirv<'tcx> {
@@ -481,9 +493,10 @@ impl<'tcx> BuilderSpirv<'tcx> {
         // Physical storage buffer addressing implies a 64-bit physical address
         // space, so switch the module's addressing model accordingly. The
         // application guarantees the capability is enabled when it uses it.
-        let addressing_model = if features.contains(&TargetFeature::Capability(
+        let physical_storage_buffer_addresses = features.contains(&TargetFeature::Capability(
             Capability::PhysicalStorageBufferAddresses,
-        )) {
+        ));
+        let addressing_model = if physical_storage_buffer_addresses {
             AddressingModel::PhysicalStorageBuffer64
         } else {
             AddressingModel::Logical
@@ -497,6 +510,7 @@ impl<'tcx> BuilderSpirv<'tcx> {
             const_to_id: Default::default(),
             id_to_const: Default::default(),
             debug_file_cache: Default::default(),
+            physical_storage_buffer_addresses,
         }
     }
 
