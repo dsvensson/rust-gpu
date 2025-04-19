@@ -12,7 +12,9 @@ use crate::custom_insts::CustomInst;
 use crate::spirv_type::{SpirvType, StorageClassKind};
 use itertools::Itertools;
 use rspirv::dr::{InsertPoint, Instruction, Operand};
-use rspirv::spirv::{MemoryModel, MemorySemantics, Op, Scope, StorageClass, Word};
+use rspirv::spirv::{
+    MemoryAccess, MemoryModel, MemorySemantics, Op, Scope, StorageClass, Word,
+};
 use rustc_abi::{Align, BackendRepr, Scalar, Size, WrappingRange};
 use rustc_apfloat::{Float, Round, Status, ieee};
 use rustc_codegen_ssa::MemFlags;
@@ -1840,11 +1842,17 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
         self.declare_func_local_var(self.type_array(self.type_i8(), size.bytes()), align)
     }
 
-    fn load(&mut self, ty: Self::Type, ptr: Self::Value, _align: Align) -> Self::Value {
+    fn load(&mut self, ty: Self::Type, ptr: Self::Value, align: Align) -> Self::Value {
         let (ptr, access_ty) = self.adjust_pointer_for_typed_access(ptr, ty);
         let loaded_val = ptr.const_fold_load(self).unwrap_or_else(|| {
             self.emit()
-                .load(access_ty, None, ptr.def(self), None, empty())
+                .load(
+                    access_ty,
+                    None,
+                    ptr.def(self),
+                    Some(MemoryAccess::ALIGNED),
+                    std::iter::once(Operand::LiteralBit32(align.bytes() as _)),
+                )
                 .unwrap()
                 .with_type(access_ty)
         });
@@ -1972,12 +1980,17 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
         // ignore
     }
 
-    fn store(&mut self, val: Self::Value, ptr: Self::Value, _align: Align) -> Self::Value {
+    fn store(&mut self, val: Self::Value, ptr: Self::Value, align: Align) -> Self::Value {
         let (ptr, access_ty) = self.adjust_pointer_for_typed_access(ptr, val.ty);
         let val = self.bitcast(val, access_ty);
 
         self.emit()
-            .store(ptr.def(self), val.def(self), None, empty())
+            .store(
+                ptr.def(self),
+                val.def(self),
+                Some(MemoryAccess::ALIGNED),
+                std::iter::once(Operand::LiteralBit32(align.bytes() as _)),
+            )
             .unwrap();
         // FIXME(eddyb) this is meant to be a handle the store instruction itself.
         val
@@ -2826,9 +2839,9 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
     fn memcpy(
         &mut self,
         dst: Self::Value,
-        _dst_align: Align,
+        dst_align: Align,
         src: Self::Value,
-        _src_align: Align,
+        src_align: Align,
         size: Self::Value,
         flags: MemFlags,
         _tt: Option<rustc_ast::expand::typetree::FncTree>,
@@ -2884,6 +2897,23 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
             }
         });
 
+        // Pass all operands as `additional_params` since rspirv doesn't allow specifying
+        // extra operands ofter the first `MemoryAccess`
+        let mut ops: SmallVec<[_; 4]> = Default::default();
+        ops.push(Operand::MemoryAccess(MemoryAccess::ALIGNED));
+        if src_align != dst_align {
+            if self.emit().version().unwrap() > (1, 3) {
+                ops.push(Operand::LiteralBit32(dst_align.bytes() as _));
+                ops.push(Operand::MemoryAccess(MemoryAccess::ALIGNED));
+                ops.push(Operand::LiteralBit32(src_align.bytes() as _));
+            } else {
+                let align = dst_align.min(src_align);
+                ops.push(Operand::LiteralBit32(align.bytes() as _));
+            }
+        } else {
+            ops.push(Operand::LiteralBit32(dst_align.bytes() as _));
+        }
+
         if let Some((dst, src)) = typed_copy_dst_src {
             if let Some(const_value) = src.const_fold_load(self) {
                 trace!("storing const value");
@@ -2891,7 +2921,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
             } else {
                 trace!("copying memory using OpCopyMemory");
                 self.emit()
-                    .copy_memory(dst.def(self), src.def(self), None, None, empty())
+                    .copy_memory(dst.def(self), src.def(self), None, None, ops)
                     .unwrap();
             }
         } else {
@@ -2902,7 +2932,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                     size.def(self),
                     None,
                     None,
-                    empty(),
+                    ops,
                 )
                 .unwrap();
             self.zombie(dst.def(self), "cannot memcpy dynamically sized data");
