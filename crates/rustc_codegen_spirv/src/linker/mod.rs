@@ -603,6 +603,12 @@ pub fn link(
         }
 
         {
+            let timer = before_pass("spirt_passes::lower_physical_nulls::lower_physical_nulls");
+            spirt_passes::lower_physical_nulls::lower_physical_nulls(module);
+            after_pass(Some(module), timer);
+        }
+
+        {
             let timer = before_pass("spirt_passes::strip_logical_alignment::strip_when_invalid");
             spirt_passes::strip_logical_alignment::strip_when_invalid(module);
             after_pass(Some(module), timer);

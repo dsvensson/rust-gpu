@@ -4,7 +4,6 @@ use crate::maybe_pqp_cg_ssa as rustc_codegen_ssa;
 use super::CodegenCx;
 use crate::abi::ConvSpirvType;
 use crate::spirv_type::SpirvType;
-use rspirv::spirv::Word;
 use rustc_abi::{AddressSpace, BackendRepr, Reg};
 use rustc_codegen_ssa::common::TypeKind;
 use rustc_codegen_ssa::traits::{BaseTypeCodegenMethods, LayoutTypeCodegenMethods};
@@ -121,13 +120,6 @@ impl<'tcx> LayoutTypeCodegenMethods<'tcx> for CodegenCx<'tcx> {
         _immediate: bool,
     ) -> Self::Type {
         crate::abi::scalar_pair_element_backend_type(self, DUMMY_SP, layout, index)
-    }
-}
-
-impl<'tcx> CodegenCx<'tcx> {
-    pub fn type_usize(&self) -> Word {
-        let ptr_size = self.tcx.data_layout.pointer_size().bits() as u32;
-        SpirvType::Integer(ptr_size, false).def(DUMMY_SP, self)
     }
 }
 

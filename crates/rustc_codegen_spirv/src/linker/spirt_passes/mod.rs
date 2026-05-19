@@ -5,6 +5,7 @@ pub(crate) mod debuginfo;
 pub(crate) mod diagnostics;
 pub(crate) mod explicit_layout;
 mod fuse_selects;
+pub(crate) mod lower_physical_nulls;
 mod reduce;
 pub(crate) mod strip_logical_alignment;
 pub(crate) mod validate;
@@ -104,13 +105,25 @@ def_spv_spec_with_extra_well_known! {
         OpTypeArray,
         OpTypeRuntimeArray,
         OpTypeStruct,
+        OpTypePointer,
 
+        OpConstant,
+        OpConstantNull,
         OpConstantComposite,
 
         OpBitcast,
         OpCompositeInsert,
         OpCompositeExtract,
         OpCompositeConstruct,
+        OpConvertUToPtr,
+        OpConvertPtrToU,
+
+        OpIEqual,
+        OpINotEqual,
+        OpUGreaterThan,
+        OpUGreaterThanEqual,
+        OpULessThan,
+        OpULessThanEqual,
 
         OpCopyMemory,
     ],

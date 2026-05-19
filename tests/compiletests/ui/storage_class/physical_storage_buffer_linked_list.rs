@@ -23,9 +23,10 @@ pub fn main(
 ) {
     let mut current = *root_node;
     *output = 0.0;
-    while !current.is_null() {
-        let node = unsafe { current.as_ref_unchecked() };
-        *output += node.payload;
-        current = node.next;
+    unsafe {
+        while let Some(node) = current.as_ref() {
+            *output += node.payload;
+            current = node.next;
+        }
     }
 }

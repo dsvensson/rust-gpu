@@ -583,13 +583,16 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
     }
 
     #[instrument(level = "trace", skip(self))]
-    fn zombie_convert_ptr_to_u(&self, def: Word) {
-        self.zombie(def, "cannot convert pointers to integers");
-    }
-
-    #[instrument(level = "trace", skip(self))]
     fn zombie_ptr_equal(&self, def: Word) {
         self.zombie(def, "cannot check pointers for equality");
+    }
+
+    /// Int type for `OpConvertPtrToU`/`OpConvertUToPtr`. Physical storage
+    /// buffer addressing is assumed to be enabled by the application, so the
+    /// conversion is always 64-bit
+    /// (VUID-StandaloneSpirv-PhysicalStorageBuffer64-04710).
+    fn pointer_to_int_type(&self) -> Word {
+        SpirvType::Integer(64, false).def(self.span(), self)
     }
 
     /// True when a `MemoryAccess::Aligned` operand must be attached to a
@@ -2665,17 +2668,15 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                                 self.zombie_ptr_equal(result);
                             })
                     } else {
-                        let int_ty = self.type_usize();
+                        let int_ty = self.pointer_to_int_type();
                         let lhs = self
                             .emit()
                             .convert_ptr_to_u(int_ty, None, lhs.def(self))
                             .unwrap();
-                        self.zombie_convert_ptr_to_u(lhs);
                         let rhs = self
                             .emit()
                             .convert_ptr_to_u(int_ty, None, rhs.def(self))
                             .unwrap();
-                        self.zombie_convert_ptr_to_u(rhs);
                         self.emit().i_equal(b, None, lhs, rhs)
                     }
                 }
@@ -2687,74 +2688,64 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                                 self.zombie_ptr_equal(result);
                             })
                     } else {
-                        let int_ty = self.type_usize();
+                        let int_ty = self.pointer_to_int_type();
                         let lhs = self
                             .emit()
                             .convert_ptr_to_u(int_ty, None, lhs.def(self))
                             .unwrap();
-                        self.zombie_convert_ptr_to_u(lhs);
                         let rhs = self
                             .emit()
                             .convert_ptr_to_u(int_ty, None, rhs.def(self))
                             .unwrap();
-                        self.zombie_convert_ptr_to_u(rhs);
                         self.emit().i_not_equal(b, None, lhs, rhs)
                     }
                 }
                 IntUGT => {
-                    let int_ty = self.type_usize();
+                    let int_ty = self.pointer_to_int_type();
                     let lhs = self
                         .emit()
                         .convert_ptr_to_u(int_ty, None, lhs.def(self))
                         .unwrap();
-                    self.zombie_convert_ptr_to_u(lhs);
                     let rhs = self
                         .emit()
                         .convert_ptr_to_u(int_ty, None, rhs.def(self))
                         .unwrap();
-                    self.zombie_convert_ptr_to_u(rhs);
                     self.emit().u_greater_than(b, None, lhs, rhs)
                 }
                 IntUGE => {
-                    let int_ty = self.type_usize();
+                    let int_ty = self.pointer_to_int_type();
                     let lhs = self
                         .emit()
                         .convert_ptr_to_u(int_ty, None, lhs.def(self))
                         .unwrap();
-                    self.zombie_convert_ptr_to_u(lhs);
                     let rhs = self
                         .emit()
                         .convert_ptr_to_u(int_ty, None, rhs.def(self))
                         .unwrap();
-                    self.zombie_convert_ptr_to_u(rhs);
                     self.emit().u_greater_than_equal(b, None, lhs, rhs)
                 }
                 IntULT => {
-                    let int_ty = self.type_usize();
+                    let int_ty = self.pointer_to_int_type();
                     let lhs = self
                         .emit()
                         .convert_ptr_to_u(int_ty, None, lhs.def(self))
                         .unwrap();
-                    self.zombie_convert_ptr_to_u(lhs);
                     let rhs = self
                         .emit()
                         .convert_ptr_to_u(int_ty, None, rhs.def(self))
                         .unwrap();
-                    self.zombie_convert_ptr_to_u(rhs);
                     self.emit().u_less_than(b, None, lhs, rhs)
                 }
                 IntULE => {
-                    let int_ty = self.type_usize();
+                    let int_ty = self.pointer_to_int_type();
                     let lhs = self
                         .emit()
                         .convert_ptr_to_u(int_ty, None, lhs.def(self))
                         .unwrap();
-                    self.zombie_convert_ptr_to_u(lhs);
                     let rhs = self
                         .emit()
                         .convert_ptr_to_u(int_ty, None, rhs.def(self))
                         .unwrap();
-                    self.zombie_convert_ptr_to_u(rhs);
                     self.emit().u_less_than_equal(b, None, lhs, rhs)
                 }
                 IntSGT => self.fatal("TODO: pointer operator IntSGT not implemented yet"),
