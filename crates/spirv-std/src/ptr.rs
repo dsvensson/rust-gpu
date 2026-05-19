@@ -113,3 +113,61 @@ impl<T> PhysicalPtr<T> {
         self.map_addr(|addr| addr.overflowing_add_signed(count).0)
     }
 }
+
+/// A physical pointer in the `PhysicalStorageBuffer` storage class that the
+/// driver may assume does not alias any other `Restrict`-marked pointer in
+/// the same shader. The pointer value yielded by [`Self::get`] carries the
+/// `Restrict` decoration in the emitted SPIR-V.
+///
+/// Use this wherever you would use [`PhysicalPtr`] but can promise the
+/// non-aliasing — the driver can then schedule loads/stores more
+/// aggressively. Aliasing reads or writes through a restricted pointer is
+/// undefined behavior.
+pub struct RestrictedPhysicalPtr<T> {
+    inner: PhysicalPtr<T>,
+}
+
+impl<T> Copy for RestrictedPhysicalPtr<T> {}
+
+impl<T> Clone for RestrictedPhysicalPtr<T> {
+    fn clone(&self) -> Self {
+        Self { inner: self.inner }
+    }
+}
+
+impl<T> RestrictedPhysicalPtr<T> {
+    /// Wraps an existing [`PhysicalPtr`] without changing its address. The
+    /// caller is responsible for ensuring that the pointer does not alias
+    /// any other pointer that may be loaded from or stored to during the
+    /// same shader invocation.
+    ///
+    /// # Safety
+    /// The non-aliasing contract is the caller's responsibility; violating
+    /// it is undefined behavior at the driver level.
+    pub const unsafe fn new(inner: PhysicalPtr<T>) -> Self {
+        Self { inner }
+    }
+
+    /// Returns the wrapped pointer, dropping the restrict guarantee.
+    pub fn into_inner(self) -> PhysicalPtr<T> {
+        self.inner
+    }
+
+    /// Get a mutable pointer to the physical address. The returned pointer
+    /// carries a `Restrict` decoration in the emitted SPIR-V — the same
+    /// aliasing rules that apply to FFI `restrict` pointers apply here.
+    #[crate::macros::gpu_only]
+    pub fn get(self) -> *mut T {
+        let result: *mut T;
+        unsafe {
+            asm!(
+                "%ptr_type = OpTypePointer PhysicalStorageBuffer typeof**{result}",
+                "{result} = OpBitcast %ptr_type {addr}",
+                "OpDecorate {result} Restrict",
+                addr = in(reg) &self.inner.addr,
+                result = out(reg) result,
+            );
+            result
+        }
+    }
+}
