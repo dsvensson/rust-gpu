@@ -646,3 +646,84 @@ fn names_and_decorations() {
 
     without_header_eq(result, expect);
 }
+
+// Regression test for the specializer's `Instance` vs `Concrete` unification
+// in `equate_infer_operands` (specializer.rs).
+//
+// Scenario: inside a function body, an instruction (`OpBitcast`) explicitly
+// produces a value whose type is a concrete (non-generic) `OpTypePointer`
+// with an explicit storage class. That value is then passed to a function
+// whose parameter type is a generic pointer. The specializer must propagate
+// the concrete storage class into the callee's storage-class inference
+// variable; otherwise the variable falls back to the specialization default
+// (`Function`, per `linker/mod.rs`) and the specialized callee disagrees
+// with the call-site argument on the pointer's storage class.
+//
+// `infer_function`'s per-instruction processing populates `type_of_result`
+// for the bitcast's result (it's a function-body instruction), so the
+// matcher at the `OpFunctionCall` sees `Concrete(IdRef(%ptr_workgroup))`
+// rather than `Unknown`, which is exactly the path the fix targets.
+#[test]
+fn specializer_propagates_concrete_storage_class_into_generic_instance() {
+    let module = assemble_spirv(
+        r#"OpCapability Shader
+            OpCapability Int64
+            OpCapability Linkage
+            OpMemoryModel Logical GLSL450
+            OpDecorate %foo LinkageAttributes "foo" Export
+            OpDecorate %main LinkageAttributes "main" Export
+            %void = OpTypeVoid
+            %int = OpTypeInt 32 0
+            %ulong = OpTypeInt 64 0
+            %c_addr = OpConstant %ulong 4096
+            %ptr_generic = OpTypePointer Generic %int
+            %ptr_workgroup = OpTypePointer Workgroup %int
+            %fn_generic = OpTypeFunction %void %ptr_generic
+            %fn_main = OpTypeFunction %void
+            %c_int = OpConstant %int 42
+            %foo = OpFunction %void None %fn_generic
+            %p_param = OpFunctionParameter %ptr_generic
+            %entry_foo = OpLabel
+            OpStore %p_param %c_int
+            OpReturn
+            OpFunctionEnd
+            %main = OpFunction %void None %fn_main
+            %entry_main = OpLabel
+            %wg_ptr = OpBitcast %ptr_workgroup %c_addr
+            %call = OpFunctionCall %void %foo %wg_ptr
+            OpReturn
+            OpFunctionEnd
+            "#,
+    );
+
+    let result = link_with_linker_opts(
+        &[&module],
+        &crate::linker::Options {
+            compact_ids: true,
+            keep_link_exports: true,
+            infer_storage_classes: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    use rspirv::binary::Disassemble;
+    let disasm = result.disassemble();
+
+    // The specializer must monomorphize `foo` for the same `Workgroup` storage
+    // class as the `OpBitcast` result that's passed at the call site.
+    // Without the fix, `foo` would be specialized with the `Function` fallback
+    // and the call-site argument type would disagree with the parameter type.
+    assert!(
+        disasm.contains("OpTypePointer Workgroup"),
+        "expected `OpTypePointer Workgroup` in the specialized output:\n{disasm}"
+    );
+    assert!(
+        !disasm.contains("OpTypePointer Function"),
+        "specializer fell back to `Function` instead of inferring `Workgroup` from the call site:\n{disasm}"
+    );
+    assert!(
+        !disasm.contains("OpTypePointer Generic"),
+        "specializer left a `Generic` pointer behind:\n{disasm}"
+    );
+}

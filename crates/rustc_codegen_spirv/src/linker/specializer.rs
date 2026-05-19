@@ -132,6 +132,7 @@ pub fn specialize(
         debug_names,
         generics: IndexMap::new(),
         int_consts: FxHashMap::default(),
+        non_generic_pointer_storage_classes: FxHashMap::default(),
     };
 
     specializer.collect_generics(&module);
@@ -534,6 +535,16 @@ struct Specializer<S: Specialization> {
     /// Integer `OpConstant`s (i.e. containing a `LiteralBit32`), to be used
     /// for interpreting `TyPat::IndexComposite` (such as for `OpAccessChain`).
     int_consts: FxHashMap<Word, u32>,
+
+    /// Storage class of every non-generic `OpTypePointer` in the module
+    /// (i.e. pointer types declared with an explicit storage class, rather
+    /// than the placeholder `StorageClass::Generic` that gets specialized).
+    /// Used when unifying a generic pointer instance with a concrete pointer
+    /// value (e.g. produced by `OpBitcast` to a `PhysicalStorageBuffer`
+    /// pointer), so that the generic's storage class inference variable is
+    /// pinned to the concrete storage class instead of falling back to the
+    /// specialization default.
+    non_generic_pointer_storage_classes: FxHashMap<Word, StorageClass>,
 }
 
 impl<S: Specialization> Specializer<S> {
@@ -631,6 +642,14 @@ impl<S: Specialization> Specializer<S> {
                         replacements,
                     },
                 );
+            } else if inst.class.opcode == Op::TypePointer {
+                // Record the storage class of every non-generic `OpTypePointer`,
+                // so that `equate_infer_operands` can propagate it into a
+                // generic pointer instance when the two are unified.
+                if let Operand::StorageClass(sc) = inst.operands[0] {
+                    self.non_generic_pointer_storage_classes
+                        .insert(result_id, sc);
+                }
             }
         }
     }
@@ -1615,11 +1634,37 @@ impl<'a, S: Specialization> InferCx<'a, S> {
 
         #[allow(clippy::match_same_arms)]
         Ok(match (a.clone(), b.clone()) {
-            // Concrete result types explicitly created inside functions
-            // can be assigned to instances.
-            // FIXME(jwollen) do we need to infere instance generics?
-            (InferOperand::Instance(_), InferOperand::Concrete(new))
-            | (InferOperand::Concrete(new), InferOperand::Instance(_)) => {
+            // A `Concrete` result type explicitly created inside a function
+            // (e.g. by `OpBitcast` to a `PhysicalStorageBuffer` pointer) is
+            // being unified with a generic pointer `Instance`. Propagate the
+            // concrete storage class into the instance's inference variable
+            // so the specializer monomorphizes the generic to a matching
+            // storage class, instead of letting the variable fall back to
+            // `Specialization::concrete_fallback`.
+            //
+            // NOTE: this propagation is intentionally limited to the storage
+            // class of the outermost pointer (the common case). Generics with
+            // a non-trivial flattened parameter list (e.g. a pointer whose
+            // pointee is itself generic) keep the rest of their inference
+            // variables unconstrained at this unification site; in practice
+            // those are pinned by other constraints in the same function.
+            (InferOperand::Instance(instance), InferOperand::Concrete(new))
+            | (InferOperand::Concrete(new), InferOperand::Instance(instance)) => {
+                if let CopyOperand::IdRef(concrete_id) = new
+                    && let Some(&concrete_sc) = self
+                        .specializer
+                        .non_generic_pointer_storage_classes
+                        .get(&concrete_id)
+                    && let Some(generic) = self.specializer.generics.get(&instance.generic_id)
+                    && generic.def.class.opcode == Op::TypePointer
+                    && instance.generic_args.end.0 > instance.generic_args.start.0
+                {
+                    let sc_var = instance.generic_args.start;
+                    self.equate_infer_operands(
+                        InferOperand::Var(sc_var),
+                        InferOperand::Concrete(CopyOperand::StorageClass(concrete_sc)),
+                    )?;
+                }
                 InferOperand::Concrete(new)
             }
 
