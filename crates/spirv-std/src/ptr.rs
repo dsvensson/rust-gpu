@@ -14,9 +14,8 @@ use crate::glam;
 /// supported on raw pointers due to the otherwise logical addressing model
 /// and 32-bit pointer size.
 pub struct PhysicalPtr<T> {
-    // Use uvec2 instead of u64 to avoid demepndency on the Int64 dependency.
+    // Stored as `UVec2` to avoid depending on the `Int64` SPIR-V capability.
     addr: glam::UVec2,
-    //addr: u64,
     _marker: PhantomData<*mut T>,
 }
 
@@ -32,20 +31,16 @@ impl<T> Clone for PhysicalPtr<T> {
 }
 
 impl<T> PhysicalPtr<T> {
-    /// Get a mutaple pointer to the physical address.
+    /// Get a mutable pointer to the physical address.
     /// The same aliasing rules that apply to FFI, apply to the returned pointer.
     #[crate::macros::gpu_only]
     pub fn get(self) -> *mut T {
         let result: *mut T;
         unsafe {
-            // FIXME(jwollen) add a way to dereference the result type further
-            // or to pass type parameters
-            let dummy: T = core::mem::MaybeUninit::uninit().assume_init();
             asm!(
-                "%ptr_type = OpTypePointer PhysicalStorageBuffer typeof*{dummy}",
+                "%ptr_type = OpTypePointer PhysicalStorageBuffer typeof**{result}",
                 "{result} = OpBitcast %ptr_type {addr}",
                 addr = in(reg) &self.addr,
-                dummy = in(reg) &dummy,
                 result = out(reg) result,
             );
             result
