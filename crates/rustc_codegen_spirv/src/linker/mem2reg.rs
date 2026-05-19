@@ -330,11 +330,14 @@ fn split_copy_memory(
                 let target = inst.operands[0].id_ref_any().unwrap();
                 let source = inst.operands[1].id_ref_any().unwrap();
                 let mem_ops = &inst.operands[2..];
-                let (store_mem_ops, load_mem_ops) = if let Some((index, _)) = mem_ops[1..]
+                let (store_mem_ops, load_mem_ops) = if mem_ops.is_empty() {
+                    (mem_ops, mem_ops)
+                } else if let Some((index, _)) = mem_ops[1..]
                     .iter()
                     .find_position(|op| matches!(op, Operand::MemoryAccess(..)))
                 {
-                    mem_ops.split_at(index)
+                    // +1 to fold the dst-side `MemoryAccess` into `store_mem_ops`.
+                    mem_ops.split_at(index + 1)
                 } else {
                     (mem_ops, mem_ops)
                 };
