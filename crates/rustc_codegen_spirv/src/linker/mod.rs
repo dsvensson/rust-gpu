@@ -23,9 +23,9 @@ use crate::custom_decorations::{CustomDecoration, SrcLocDecoration, ZombieDecora
 use crate::custom_insts;
 use either::Either;
 use rspirv::binary::Assemble;
-use rspirv::dr::{Block, Module, ModuleHeader, Operand};
+use rspirv::dr::{Block, Instruction, Module, ModuleHeader, Operand};
 use rspirv::spirv::{Op, StorageClass, Word};
-use rustc_data_structures::fx::FxHashMap;
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::ErrorGuaranteed;
 use rustc_session::Session;
 use rustc_session::config::OutputFilenames;
@@ -114,6 +114,29 @@ fn apply_rewrite_rules<'a>(
             *id = rewrite;
         }
     }
+}
+
+/// Variables that carry a memory-object-declaration-only decoration
+/// (`Restrict` / `RestrictPointer`) and so must not be SSA-promoted.
+pub(super) fn pinned_variables_from_annotations(annotations: &[Instruction]) -> FxHashSet<Word> {
+    let mut pinned = FxHashSet::default();
+    for inst in annotations {
+        if inst.class.opcode != Op::Decorate {
+            continue;
+        }
+        let Some(Operand::Decoration(dec)) = inst.operands.get(1) else {
+            continue;
+        };
+        if matches!(
+            dec,
+            rspirv::spirv::Decoration::Restrict | rspirv::spirv::Decoration::RestrictPointer
+        ) {
+            if let Some(Operand::IdRef(target)) = inst.operands.first() {
+                pinned.insert(*target);
+            }
+        }
+    }
+    pinned
 }
 
 fn get_names(module: &Module) -> FxHashMap<Word, &str> {
@@ -407,6 +430,7 @@ pub fn link(
                 _ => {}
             }
         }
+        let pinned_variables = pinned_variables_from_annotations(&output.annotations);
         for func in &mut output.functions {
             simple_passes::block_ordering_pass(func);
             // Note: mem2reg requires functions to be in RPO order (i.e. block_ordering_pass)
@@ -415,6 +439,7 @@ pub fn link(
                 &mut output.types_global_values,
                 &pointer_to_pointee,
                 &constants,
+                &pinned_variables,
                 func,
             );
             destructure_composites::destructure_composites(func);
@@ -483,6 +508,7 @@ pub fn link(
                 _ => {}
             }
         }
+        let pinned_variables = pinned_variables_from_annotations(&output.annotations);
         for func in &mut output.functions {
             simple_passes::block_ordering_pass(func);
             // Note: mem2reg requires functions to be in RPO order (i.e. block_ordering_pass)
@@ -491,6 +517,7 @@ pub fn link(
                 &mut output.types_global_values,
                 &pointer_to_pointee,
                 &constants,
+                &pinned_variables,
                 func,
             );
             destructure_composites::destructure_composites(func);

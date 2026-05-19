@@ -13,15 +13,16 @@ use std::ffi::{CStr, c_char};
 use std::fs::File;
 use std::path::PathBuf;
 
-/// Mirrors `physical_ptr_shader::Node` byte-for-byte. The shader's `next`
-/// field is a `PhysicalPtr<Node>` (`UVec2`) which the host stores as a
-/// `u64` device address.
+/// Matches the shader's `Node` byte-for-byte: an 8-byte device address
+/// (the shader's `PhysicalPtr<Node>` is `glam::UVec2`) followed by a
+/// 4-byte `f32`. Using `[u32; 2]` instead of a `u64` for `next` keeps
+/// the struct alignment at 4 bytes — a `u64` field would force align-8
+/// and add 4 bytes of tail padding, breaking the byte-for-byte mirror.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable, Debug)]
 struct Node {
-    next: u64,
+    next: [u32; 2],
     payload: f32,
-    _pad: u32,
 }
 
 const NODE_COUNT: usize = 8;
@@ -137,16 +138,18 @@ unsafe fn dispatch(spv_words: &[u32], cpu_sum: f32) -> Result<()> { unsafe {
         device.get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(nodes_buf));
 
     // Build the linked list: each node's `next` is the address of the
-    // following node, last node's `next` is 0.
+    // following node, last node's `next` is 0. Store the address as two
+    // little-endian u32 halves so the on-disk layout matches the shader's
+    // `glam::UVec2`-backed `PhysicalPtr`.
+    let split_addr = |addr: u64| [addr as u32, (addr >> 32) as u32];
     let nodes: Vec<Node> = (0..NODE_COUNT)
         .map(|i| Node {
-            next: if i + 1 < NODE_COUNT {
+            next: split_addr(if i + 1 < NODE_COUNT {
                 nodes_base_addr + (i as u64 + 1) * node_size
             } else {
                 0
-            },
+            }),
             payload: PAYLOADS[i],
-            _pad: 0,
         })
         .collect();
     let mapped = device.map_memory(nodes_mem, 0, nodes_size, vk::MemoryMapFlags::empty())?;

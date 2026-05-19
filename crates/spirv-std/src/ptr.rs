@@ -134,19 +134,12 @@ impl<T> PhysicalPtr<T> {
     }
 }
 
-/// A physical pointer in the `PhysicalStorageBuffer` storage class that the
-/// caller asserts does not alias any other pointer accessed by the same
-/// shader. The wrapper is a typed marker today; emitting the SPIR-V
-/// `Restrict` decoration on the actual access still requires codegen-level
-/// plumbing because the bitcast result is stored through a Rust local before
-/// being dereferenced and decorations don't propagate through that store/load
-/// pair. Until that lands, the wrapper documents the invariant and lets
-/// consumer APIs require the restrict promise via the type system.
-///
-/// # Safety
-/// Aliasing reads or writes through a restricted pointer are undefined
-/// behavior at the driver level once the decoration is emitted; treating the
-/// type as a contract from the start avoids API churn later.
+/// A physical pointer the caller asserts is non-aliasing. Typed marker
+/// today — emitting the SPIR-V `RestrictPointer` decoration end-to-end
+/// still needs codegen plumbing (the spec only allows it on memory-object
+/// declarations, and the asm!-fed Function local that backs the asm!
+/// result is promoted away before linking). Treat the type as a binding
+/// contract; misuse is UB once the decoration lands.
 pub struct RestrictedPhysicalPtr<T> {
     inner: PhysicalPtr<T>,
 }
@@ -176,9 +169,8 @@ impl<T> RestrictedPhysicalPtr<T> {
         self.inner
     }
 
-    /// Get a mutable pointer to the physical address. The address is the same
-    /// as the wrapped [`PhysicalPtr::get`] result; the wrapper's restrict
-    /// promise is documentary today (see the type-level docs).
+    /// Same as [`PhysicalPtr::get`] today; the restrict promise is
+    /// type-level until codegen can preserve the decoration.
     pub fn get(self) -> *mut T {
         self.inner.get()
     }

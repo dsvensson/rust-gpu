@@ -213,6 +213,9 @@ impl<'a, 'tcx> AsmBuilderMethods<'tcx> for Builder<'a, 'tcx> {
         let mut id_map = FxHashMap::default();
         let mut defined_ids = FxHashSet::default();
         let mut id_to_type_map = FxHashMap::default();
+        // Pre-allocated result-ids for `out(reg)` placeholders, so later
+        // instructions in the same `asm!` can reference them as values.
+        let mut out_placeholder_ids: FxHashMap<Word, Word> = FxHashMap::default();
         for operand in &operands {
             if let InlineAsmOperandRef::In { reg: _, value } = operand {
                 let value = value.immediate();
@@ -236,6 +239,7 @@ impl<'a, 'tcx> AsmBuilderMethods<'tcx> for Builder<'a, 'tcx> {
                 &mut id_map,
                 &mut defined_ids,
                 &mut id_to_type_map,
+                &mut out_placeholder_ids,
                 &mut asm_block,
                 line.into_iter(),
             );
@@ -518,6 +522,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
         id_map: &mut FxHashMap<&'a str, Word>,
         defined_ids: &mut FxHashSet<Word>,
         id_to_type_map: &mut FxHashMap<Word, Word>,
+        out_placeholder_ids: &mut FxHashMap<Word, Word>,
         asm_block: &mut AsmBlock,
         mut tokens: impl Iterator<Item = Token<'a, 'cx, 'tcx>>,
     ) where
@@ -578,7 +583,11 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
         };
         let result_id = match out_register {
             Some(OutRegister::Regular(reg)) => Some(reg),
-            Some(OutRegister::Place(_)) => Some(self.emit().id()),
+            Some(OutRegister::Place(place)) => {
+                let id = self.emit().id();
+                out_placeholder_ids.insert(place.val.llval.def(self), id);
+                Some(id)
+            }
             None => None,
         };
         let mut instruction = dr::Instruction {
@@ -587,7 +596,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
             result_id,
             operands: vec![],
         };
-        self.parse_operands(id_map, id_to_type_map, tokens, &mut instruction);
+        self.parse_operands(id_map, id_to_type_map, out_placeholder_ids, tokens, &mut instruction);
         if let Some(result_type) = instruction.result_type {
             id_to_type_map.insert(instruction.result_id.unwrap(), result_type);
         }
@@ -608,6 +617,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
         &mut self,
         id_map: &mut FxHashMap<&'a str, Word>,
         id_to_type_map: &FxHashMap<Word, Word>,
+        out_placeholder_ids: &FxHashMap<Word, Word>,
         mut tokens: impl Iterator<Item = Token<'a, 'cx, 'tcx>>,
         instruction: &mut dr::Instruction,
     ) where
@@ -642,7 +652,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 if let Some(token) = tokens.next() {
                     if let Token::Word("_") = token {
                         need_result_type_infer = true;
-                    } else if let Some(id) = self.parse_id_in(id_map, token) {
+                    } else if let Some(id) = self.parse_id_in(id_map, out_placeholder_ids, token) {
                         instruction.result_type = Some(id);
                     }
                 } else {
@@ -658,7 +668,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
 
             match quantifier {
                 OperandQuantifier::One => {
-                    if !self.parse_one_operand(id_map, instruction, kind, &mut tokens) {
+                    if !self.parse_one_operand(id_map, out_placeholder_ids, instruction, kind, &mut tokens) {
                         self.err(format!(
                             "expected operand after instruction: {}",
                             instruction.class.opname
@@ -667,11 +677,11 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                     }
                 }
                 OperandQuantifier::ZeroOrOne => {
-                    let _ = self.parse_one_operand(id_map, instruction, kind, &mut tokens);
+                    let _ = self.parse_one_operand(id_map, out_placeholder_ids, instruction, kind, &mut tokens);
                     // If this return false, well, it's optional, do nothing
                 }
                 OperandQuantifier::ZeroOrMore => {
-                    while self.parse_one_operand(id_map, instruction, kind, &mut tokens) {}
+                    while self.parse_one_operand(id_map, out_placeholder_ids, instruction, kind, &mut tokens) {}
                 }
             }
 
@@ -1010,6 +1020,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
     fn parse_id_in<'a>(
         &mut self,
         id_map: &mut FxHashMap<&'a str, Word>,
+        out_placeholder_ids: &FxHashMap<Word, Word>,
         token: Token<'a, 'cx, 'tcx>,
     ) -> Option<Word> {
         match token {
@@ -1141,13 +1152,22 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 InlineAsmOperandRef::Out {
                     reg,
                     late: _,
-                    place: _,
+                    place,
                 } => {
                     self.check_reg(span, reg);
-                    self.tcx
-                        .dcx()
-                        .span_err(span, "out register cannot be used as a value");
-                    None
+                    // Only referenceable after a prior `{name} = OpXyz ...` in this asm! block.
+                    let bound_id = place.as_ref().and_then(|place| {
+                        out_placeholder_ids
+                            .get(&place.val.llval.def(self))
+                            .copied()
+                    });
+                    bound_id.or_else(|| {
+                        self.tcx.dcx().span_err(
+                            span,
+                            "out register cannot be used as a value before it has been bound",
+                        );
+                        None
+                    })
                 }
                 InlineAsmOperandRef::InOut {
                     reg,
@@ -1189,6 +1209,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
     fn parse_one_operand<'a>(
         &mut self,
         id_map: &mut FxHashMap<&'a str, Word>,
+        out_placeholder_ids: &FxHashMap<Word, Word>,
         inst: &mut dr::Instruction,
         kind: OperandKind,
         tokens: &mut impl Iterator<Item = Token<'a, 'cx, 'tcx>>,
@@ -1210,17 +1231,17 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 bug!("should be handled by parse_operands");
             }
             (OperandKind::IdMemorySemantics, _) => {
-                if let Some(id) = self.parse_id_in(id_map, token) {
+                if let Some(id) = self.parse_id_in(id_map, out_placeholder_ids, token) {
                     inst.operands.push(dr::Operand::IdMemorySemantics(id));
                 }
             }
             (OperandKind::IdScope, _) => {
-                if let Some(id) = self.parse_id_in(id_map, token) {
+                if let Some(id) = self.parse_id_in(id_map, out_placeholder_ids, token) {
                     inst.operands.push(dr::Operand::IdScope(id));
                 }
             }
             (OperandKind::IdRef, _) => {
-                if let Some(id) = self.parse_id_in(id_map, token) {
+                if let Some(id) = self.parse_id_in(id_map, out_placeholder_ids, token) {
                     inst.operands.push(dr::Operand::IdRef(id));
                 }
             }
@@ -1303,7 +1324,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 self.err("PairLiteralIntegerIdRef not supported yet");
             }
             (OperandKind::PairIdRefLiteralInteger, _) => {
-                if let Some(id) = self.parse_id_in(id_map, token) {
+                if let Some(id) = self.parse_id_in(id_map, out_placeholder_ids, token) {
                     inst.operands.push(dr::Operand::IdRef(id));
                     match tokens.next() {
                         Some(Token::Word(word)) => match word.parse() {
@@ -1334,11 +1355,11 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 }
             }
             (OperandKind::PairIdRefIdRef, _) => {
-                if let Some(id) = self.parse_id_in(id_map, token) {
+                if let Some(id) = self.parse_id_in(id_map, out_placeholder_ids, token) {
                     inst.operands.push(dr::Operand::IdRef(id));
                     match tokens.next() {
                         Some(token) => {
-                            if let Some(id) = self.parse_id_in(id_map, token) {
+                            if let Some(id) = self.parse_id_in(id_map, out_placeholder_ids, token) {
                                 inst.operands.push(dr::Operand::IdRef(id));
                             }
                         }

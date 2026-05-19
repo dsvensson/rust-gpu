@@ -44,6 +44,10 @@ pub fn inline(sess: &Session, module: &mut Module) -> super::Result<()> {
 
     let legal_globals = LegalGlobal::gather_from_module(module);
 
+    // Must be computed before the `Inliner` takes its mutable borrow of `module`.
+    let mem2reg_pinned_variables =
+        super::pinned_variables_from_annotations(&module.annotations);
+
     let header = module.header.as_mut().unwrap();
 
     // FIXME(eddyb) clippy false positive (separate `map` required for borrowck).
@@ -179,6 +183,7 @@ pub fn inline(sess: &Session, module: &mut Module) -> super::Result<()> {
                 &mut module.types_global_values,
                 &mem2reg_pointer_to_pointee,
                 &mem2reg_constants,
+                &mem2reg_pinned_variables,
                 &mut function,
             );
             super::destructure_composites::destructure_composites(&mut function);
