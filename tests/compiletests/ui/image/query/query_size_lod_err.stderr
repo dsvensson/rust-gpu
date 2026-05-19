@@ -5,21 +5,21 @@ LL |     *output = image.query_size_lod(0);
    |                     ^^^^^^^^^^^^^^ the trait `HasQuerySizeLod` is not implemented for `Image<f32, 4, 2, 0, 0, 1, 0, 4>`
    |
 help: the following other types implement trait `HasQuerySizeLod`
-  --> $SPIRV_STD_SRC/image.rs:2089:0
-  ::: $SPIRV_STD_SRC/image.rs:2106:5
+  --> $SPIRV_STD_SRC/image.rs:2140:0
+  ::: $SPIRV_STD_SRC/image.rs:2157:5
    |
    = note: `Image<SampledType, 0, DEPTH, ARRAYED, 0, SAMPLED, FORMAT, COMPONENTS>`
-  ::: $SPIRV_STD_SRC/image.rs:2126:5
+  ::: $SPIRV_STD_SRC/image.rs:2177:5
    |
    = note: `Image<SampledType, 1, DEPTH, ARRAYED, 0, SAMPLED, FORMAT, COMPONENTS>`
-  ::: $SPIRV_STD_SRC/image.rs:2146:5
+  ::: $SPIRV_STD_SRC/image.rs:2197:5
    |
    = note: `Image<SampledType, 2, DEPTH, ARRAYED, 0, SAMPLED, FORMAT, COMPONENTS>`
-  ::: $SPIRV_STD_SRC/image.rs:2166:5
+  ::: $SPIRV_STD_SRC/image.rs:2217:5
    |
    = note: `Image<SampledType, 3, DEPTH, ARRAYED, 0, SAMPLED, FORMAT, COMPONENTS>`
 note: required by a bound in `Image::<SampledType, DIM, DEPTH, ARRAYED, spirv_std::::image::{impl#7}::{constant#0}, SAMPLED, FORMAT, COMPONENTS>::query_size_lod`
-  --> $SPIRV_STD_SRC/image.rs:1076:4
+  --> $SPIRV_STD_SRC/image.rs:1127:4
    = note: this error originates in the attribute macro `crate::macros::gpu_only` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: aborting due to 1 previous error

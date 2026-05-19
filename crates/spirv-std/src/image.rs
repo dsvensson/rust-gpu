@@ -853,17 +853,21 @@ impl<
             // for the same pattern).
             let mut result: core::mem::MaybeUninit<&mut SampledType> =
                 core::mem::MaybeUninit::uninit();
-            let scalar_type_hint = SampledType::default();
+            // `hint` is a no-op stand-in whose only job is to give `asm!` a
+            // value of type `SampledType` so `typeof*{hint}` resolves to it.
+            // `in(reg)` requires a value with a SPIR-V-known type, so pass
+            // it by reference (`&hint`).
+            let hint = SampledType::default();
             asm! {
                 "%coord = OpLoad _ {coord}",
                 "%sample = OpLoad _ {sample}",
-                "%texel_ptr_ty = OpTypePointer Image typeof{hint}",
+                "%texel_ptr_ty = OpTypePointer Image typeof*{hint}",
                 "%texel_ptr = OpImageTexelPointer %texel_ptr_ty {this} %coord %sample",
                 "OpStore {result} %texel_ptr",
                 this = in(reg) self,
                 coord = in(reg) &coordinate,
                 sample = in(reg) &sample,
-                hint = in(reg) scalar_type_hint,
+                hint = in(reg) &hint,
                 result = in(reg) result.as_mut_ptr(),
             }
             result.assume_init()
