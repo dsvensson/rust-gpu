@@ -1,5 +1,9 @@
-// Cover `RestrictedPhysicalPtr<T>::get()`: emits `OpDecorate %ptr Restrict`
-// against the OpBitcast result. Driver can then assume non-aliasing.
+// Cover `RestrictedPhysicalPtr<T>::get()` as a typed-marker wrapper around
+// `PhysicalPtr<T>`. The SPIR-V `RestrictPointer` decoration is not yet
+// emitted (the spec only allows it on memory-object declarations, and the
+// runtime-constructed pointer that backs the API doesn't survive
+// optimization as a stable variable); this test just makes sure the
+// wrapper API compiles end-to-end through the qptr-free pipeline.
 
 // build-pass
 // compile-flags: -C target-feature=+PhysicalStorageBufferAddresses,+Int64,+ext:SPV_KHR_physical_storage_buffer

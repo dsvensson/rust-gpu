@@ -27,6 +27,7 @@ pub fn mem2reg(
     types_global_values: &mut Vec<Instruction>,
     pointer_to_pointee: &FxHashMap<Word, Word>,
     constants: &FxHashMap<Word, u32>,
+    pinned_variables: &FxHashSet<Word>,
     func: &mut Function,
 ) {
     // HACK(eddyb) this ad-hoc indexing might be useful elsewhere as well, but
@@ -47,6 +48,7 @@ pub fn mem2reg(
             types_global_values,
             pointer_to_pointee,
             constants,
+            pinned_variables,
             &mut blocks,
             &dominance_frontier,
         );
@@ -172,6 +174,7 @@ fn insert_phis_all(
     types_global_values: &mut Vec<Instruction>,
     pointer_to_pointee: &FxHashMap<Word, Word>,
     constants: &FxHashMap<Word, u32>,
+    pinned_variables: &FxHashSet<Word>,
     blocks: &mut FxIndexMap<LabelId, &mut Block>,
     dominance_frontier: &[FxHashSet<usize>],
 ) -> bool {
@@ -179,6 +182,9 @@ fn insert_phis_all(
         .instructions
         .iter()
         .filter(|inst| inst.class.opcode == Op::Variable)
+        // Skip variables whose decorations require a memory-object declaration
+        // (e.g. `Restrict`); promoting them to SSA would orphan the decoration.
+        .filter(|inst| !pinned_variables.contains(&inst.result_id.unwrap()))
         .filter_map(|inst| {
             let var = inst.result_id.unwrap();
             let var_ty = *pointer_to_pointee.get(&inst.result_type.unwrap()).unwrap();
