@@ -192,6 +192,7 @@ impl<'a, 'tcx> AsmBuilderMethods<'tcx> for Builder<'a, 'tcx> {
                     let typeof_kind = line.last().and_then(|prev| match prev {
                         Token::Word("typeof") => Some(TypeofKind::Plain),
                         Token::Word("typeof*") => Some(TypeofKind::Dereference),
+                        Token::Word("typeof**") => Some(TypeofKind::DoubleDereference),
                         _ => None,
                     });
                     match typeof_kind {
@@ -272,6 +273,7 @@ impl<'a, 'tcx> AsmBuilderMethods<'tcx> for Builder<'a, 'tcx> {
 enum TypeofKind {
     Plain,
     Dereference,
+    DoubleDereference,
 }
 
 enum Token<'a, 'cx, 'tcx> {
@@ -1016,21 +1018,26 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 InlineAsmOperandRef::In { reg, value } => {
                     self.check_reg(span, reg);
                     let ty = value.immediate().ty;
+                    let deref_once = |this: &Self, ty: Word, op: &str| match this.lookup_type(ty) {
+                        SpirvType::Pointer { pointee, .. } => Some(pointee),
+                        other => {
+                            this.tcx.dcx().span_err(
+                                span,
+                                format!(
+                                    "cannot use {op} on non-pointer type: {}",
+                                    other.debug(ty, this)
+                                ),
+                            );
+                            None
+                        }
+                    };
                     Some(match kind {
                         TypeofKind::Plain => ty,
-                        TypeofKind::Dereference => match self.lookup_type(ty) {
-                            SpirvType::Pointer { pointee, .. } => pointee,
-                            other => {
-                                self.tcx.dcx().span_err(
-                                    span,
-                                    format!(
-                                        "cannot use typeof* on non-pointer type: {}",
-                                        other.debug(ty, self)
-                                    ),
-                                );
-                                ty
-                            }
-                        },
+                        TypeofKind::Dereference => deref_once(self, ty, "typeof*").unwrap_or(ty),
+                        TypeofKind::DoubleDereference => {
+                            let once = deref_once(self, ty, "typeof**")?;
+                            deref_once(self, once, "typeof**")?
+                        }
                     })
                 }
                 InlineAsmOperandRef::Out {
@@ -1040,18 +1047,38 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 } => {
                     self.check_reg(span, reg);
                     if let Some(place) = place {
-                        match self.lookup_type(place.val.llval.ty) {
-                            SpirvType::Pointer { pointee, .. } => Some(pointee),
+                        let place_ty = place.val.llval.ty;
+                        let var_ty = match self.lookup_type(place_ty) {
+                            SpirvType::Pointer { pointee, .. } => pointee,
                             other => {
                                 self.tcx.dcx().span_err(
                                     span,
                                     format!(
                                         "out register type not pointer: {}",
-                                        other.debug(place.val.llval.ty, self)
+                                        other.debug(place_ty, self)
                                     ),
                                 );
-                                None
+                                return None;
                             }
+                        };
+                        match kind {
+                            // `typeof`/`typeof*` of an out operand both resolve to the
+                            // variable's type; `typeof**` derefs once more (e.g. `*mut T` => `T`).
+                            TypeofKind::Plain | TypeofKind::Dereference => Some(var_ty),
+                            TypeofKind::DoubleDereference => match self.lookup_type(var_ty) {
+                                SpirvType::Pointer { pointee, .. } => Some(pointee),
+                                other => {
+                                    self.tcx.dcx().span_err(
+                                        span,
+                                        format!(
+                                            "cannot use typeof** on out register whose \
+                                             variable type is not a pointer: {}",
+                                            other.debug(var_ty, self)
+                                        ),
+                                    );
+                                    None
+                                }
+                            },
                         }
                     } else {
                         self.tcx
