@@ -66,13 +66,30 @@ impl<T> PhysicalPtr<T> {
     }
 
     /// Returns `None` if the pointer is null, or else returns a shared reference to the value wrapped in `Some`.
+    ///
+    /// # Safety
+    /// The caller is responsible for ensuring the pointer is valid and the
+    /// referent is not aliased mutably for the lifetime of the returned
+    /// reference.
     pub unsafe fn as_ref<'a>(self) -> Option<&'a T> {
-        self.is_null().then_some(unsafe { self.as_ref_unchecked() })
+        if self.is_null() {
+            None
+        } else {
+            Some(unsafe { self.as_ref_unchecked() })
+        }
     }
 
     /// Returns `None` if the pointer is null, or else returns a mutable reference to the value wrapped in `Some`.
+    ///
+    /// # Safety
+    /// The caller is responsible for ensuring the pointer is valid and not
+    /// aliased for the lifetime of the returned reference.
     pub unsafe fn as_mut<'a>(self) -> Option<&'a mut T> {
-        self.is_null().then_some(unsafe { self.as_mut_unchecked() })
+        if self.is_null() {
+            None
+        } else {
+            Some(unsafe { self.as_mut_unchecked() })
+        }
     }
 
     /// Returns a shared reference to the value behind the pointer.

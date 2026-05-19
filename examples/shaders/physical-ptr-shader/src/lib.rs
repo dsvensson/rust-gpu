@@ -26,17 +26,24 @@ pub fn main(
     #[spirv(push_constant)] root_node: &PhysicalPtr<Node>,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut f32,
 ) {
+    // Ideally this would read:
+    //
+    //     while let Some(node) = current.as_ref() {
+    //         *output += node.payload;
+    //         current = node.next;
+    //     }
+    //
+    // …but Rust's null-pointer-optimised `Option<&T>` lowers the `None` case
+    // to `OpConstantNull` of the `&T` pointer type, and `spirv-val` forbids
+    // null constants for pointers in the `PhysicalStorageBuffer` storage
+    // class. Wiring up a SPIR-T pass that rewrites those into a
+    // function-local `OpConvertUToPtr 0` is left as a follow-up; in the
+    // meantime, the explicit `is_null` form below produces clean SPIR-V.
     let mut current = *root_node;
-    let mut sum: f32 = 0.0;
-    // Bound the loop so we never run away on a corrupted list. 4096 nodes is
-    // plenty for examples; a real workload would size this to the maximum
-    // expected list length.
-    let mut steps = 0u32;
-    while !current.is_null() && steps < 4096 {
-        let node = unsafe { &*current.get() };
-        sum += node.payload;
+    *output = 0.0;
+    while !current.is_null() {
+        let node = unsafe { current.as_ref_unchecked() };
+        *output += node.payload;
         current = node.next;
-        steps += 1;
     }
-    *output = sum;
 }
