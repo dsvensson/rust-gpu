@@ -132,18 +132,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         .def(self.span(), self)
     }
 
-    pub fn type_ptr_with_storage_class_to(
-        &self,
-        ty: Word,
-        storage_class: StorageClassKind,
-    ) -> Word {
-        SpirvType::Pointer {
-            pointee: ty,
-            storage_class,
-        }
-        .def(self.span(), self)
-    }
-
     // TODO: Definitely add tests to make sure this impl is right.
     fn rotate(&mut self, value: SpirvValue, shift: SpirvValue, is_left: bool) -> SpirvValue {
         let width = match self.lookup_type(shift.ty) {

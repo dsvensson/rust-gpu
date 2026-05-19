@@ -822,6 +822,53 @@ impl<
             }
         }
     }
+
+    /// Get a pointer to a single texel for atomic access.
+    ///
+    /// This emits `OpImageTexelPointer`, which returns a pointer with the
+    /// `Image` storage class. The result can be passed to the atomic
+    /// operations in [`crate::arch::atomics`] (e.g. `atomic_i_add`) to
+    /// perform read-modify-write on storage images.
+    ///
+    /// For non-multisampled images, `sample` must be `0`.
+    ///
+    /// # Safety
+    /// The caller is responsible for ensuring that `coordinate` is within
+    /// the image's bounds and that the access is correctly synchronized
+    /// with respect to other accesses to the image.
+    #[crate::macros::gpu_only]
+    #[doc(alias = "OpImageTexelPointer")]
+    #[inline]
+    pub unsafe fn texel_pointer<I>(
+        &self,
+        coordinate: impl ImageCoordinate<I, DIM, ARRAYED>,
+        sample: u32,
+    ) -> &mut SampledType
+    where
+        I: Integer,
+    {
+        unsafe {
+            // `MaybeUninit` only exists to give the `asm!` block a place to
+            // write the resulting pointer through (see `RuntimeArray::index`
+            // for the same pattern).
+            let mut result: core::mem::MaybeUninit<&mut SampledType> =
+                core::mem::MaybeUninit::uninit();
+            let scalar_type_hint = SampledType::default();
+            asm! {
+                "%coord = OpLoad _ {coord}",
+                "%sample = OpLoad _ {sample}",
+                "%texel_ptr_ty = OpTypePointer Image typeof{hint}",
+                "%texel_ptr = OpImageTexelPointer %texel_ptr_ty {this} %coord %sample",
+                "OpStore {result} %texel_ptr",
+                this = in(reg) self,
+                coord = in(reg) &coordinate,
+                sample = in(reg) &sample,
+                hint = in(reg) scalar_type_hint,
+                result = in(reg) result.as_mut_ptr(),
+            }
+            result.assume_init()
+        }
+    }
 }
 
 impl<
