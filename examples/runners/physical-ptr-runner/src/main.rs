@@ -7,23 +7,12 @@
 use anyhow::{Context, Result, anyhow};
 use ash::util::read_spv;
 use ash::{Entry, vk};
-use bytemuck::{Pod, Zeroable};
+use physical_ptr_shader::Node;
 use spirv_builder::{Capability, SpirvBuilder};
+use spirv_std::ptr::PhysicalPtr;
 use std::ffi::{CStr, c_char};
 use std::fs::File;
 use std::path::PathBuf;
-
-/// Matches the shader's `Node` byte-for-byte: an 8-byte device address
-/// (the shader's `PhysicalPtr<Node>` is `glam::UVec2`) followed by a
-/// 4-byte `f32`. Using `[u32; 2]` instead of a `u64` for `next` keeps
-/// the struct alignment at 4 bytes — a `u64` field would force align-8
-/// and add 4 bytes of tail padding, breaking the byte-for-byte mirror.
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable, Debug)]
-struct Node {
-    next: [u32; 2],
-    payload: f32,
-}
 
 const NODE_COUNT: usize = 8;
 const PAYLOADS: [f32; NODE_COUNT] = [1.0, 2.5, 3.0, 4.5, 5.0, 6.5, 7.0, 8.5];
@@ -137,18 +126,14 @@ unsafe fn dispatch(spv_words: &[u32], cpu_sum: f32) -> Result<()> { unsafe {
     let nodes_base_addr =
         device.get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(nodes_buf));
 
-    // Build the linked list: each node's `next` is the address of the
-    // following node, last node's `next` is 0. Store the address as two
-    // little-endian u32 halves so the on-disk layout matches the shader's
-    // `glam::UVec2`-backed `PhysicalPtr`.
-    let split_addr = |addr: u64| [addr as u32, (addr >> 32) as u32];
+    // Build the linked list; last node's `next` is `null()`.
     let nodes: Vec<Node> = (0..NODE_COUNT)
         .map(|i| Node {
-            next: split_addr(if i + 1 < NODE_COUNT {
-                nodes_base_addr + (i as u64 + 1) * node_size
+            next: if i + 1 < NODE_COUNT {
+                PhysicalPtr::<Node>::from_addr(nodes_base_addr + (i as u64 + 1) * node_size)
             } else {
-                0
-            }),
+                PhysicalPtr::<Node>::null()
+            },
             payload: PAYLOADS[i],
         })
         .collect();

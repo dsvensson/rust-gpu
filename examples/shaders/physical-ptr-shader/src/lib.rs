@@ -7,15 +7,15 @@
 // HACK(eddyb) can't easily see warnings otherwise from `spirv-builder` builds.
 #![deny(warnings)]
 
+use bytemuck::{Pod, Zeroable};
 use spirv_std::ptr::PhysicalPtr;
 use spirv_std::spirv;
 
-/// Two-field node accessed through a physical pointer. `next` is itself a
-/// `PhysicalPtr<Node>` — the recursive shape from the PR description, made
-/// possible because `PhysicalPtr` is a fixed-size address wrapper (two
-/// `u32`s) and `PhantomData<*mut T>` carries the `T` only at the type level.
-/// A null `next` terminates the list.
+/// Recursive linked-list node accessed through a physical pointer. `Pod`
+/// so a CPU host can build a `Vec<Node>` and upload it via
+/// `bytemuck::cast_slice`.
 #[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
 pub struct Node {
     pub next: PhysicalPtr<Node>,
     pub payload: f32,

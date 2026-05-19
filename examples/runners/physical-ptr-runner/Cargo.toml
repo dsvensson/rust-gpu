@@ -20,6 +20,11 @@ ash = "0.38"
 anyhow = "1.0.98"
 bytemuck.workspace = true
 spirv-builder = { workspace = true, default-features = false }
+spirv-std = { workspace = true, features = ["bytemuck"] }
+# Pull in the shader crate as a CPU dep so the host can construct a
+# `Node { next: PhysicalPtr<Node>, payload }` directly instead of mirroring
+# the layout with `[u32; 2]`.
+physical-ptr-shader = { path = "../../shaders/physical-ptr-shader" }
 
 [package.metadata.release]
 release = false

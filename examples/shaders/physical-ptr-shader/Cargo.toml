@@ -11,7 +11,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-spirv-std = { workspace = true }
+spirv-std = { workspace = true, features = ["bytemuck"] }
+bytemuck = { version = "1.18.0", features = ["derive"] }
 
 [package.metadata.release]
 release = false
