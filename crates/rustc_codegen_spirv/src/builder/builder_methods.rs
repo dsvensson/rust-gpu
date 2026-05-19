@@ -600,6 +600,20 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         }
     }
 
+    /// Returns `true` if `ptr` is a pointer whose explicit storage class is
+    /// `PhysicalStorageBuffer`. Used to decide whether a `MemoryAccess::Aligned`
+    /// operand is required on the resulting load/store/copy — physical
+    /// addressing requires it, logical addressing forbids it.
+    fn pointer_has_physical_storage_class(&self, ptr: SpirvValue) -> bool {
+        match self.lookup_type(ptr.ty) {
+            SpirvType::Pointer {
+                storage_class: StorageClassKind::Explicit(StorageClass::PhysicalStorageBuffer),
+                ..
+            } => true,
+            _ => false,
+        }
+    }
+
     /// Convenience wrapper for `adjust_pointer_for_sized_access`, falling back
     /// on choosing `ty` as the leaf's type (and casting `ptr` to a pointer to it).
     //
@@ -1852,15 +1866,17 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
 
     fn load(&mut self, ty: Self::Type, ptr: Self::Value, align: Align) -> Self::Value {
         let (ptr, access_ty) = self.adjust_pointer_for_typed_access(ptr, ty);
+        let (mem_access, extra) = if self.pointer_has_physical_storage_class(ptr) {
+            (
+                Some(MemoryAccess::ALIGNED),
+                smallvec::smallvec![Operand::LiteralBit32(align.bytes() as _)] as SmallVec<[_; 1]>,
+            )
+        } else {
+            (None, SmallVec::new())
+        };
         let loaded_val = ptr.const_fold_load(self).unwrap_or_else(|| {
             self.emit()
-                .load(
-                    access_ty,
-                    None,
-                    ptr.def(self),
-                    Some(MemoryAccess::ALIGNED),
-                    std::iter::once(Operand::LiteralBit32(align.bytes() as _)),
-                )
+                .load(access_ty, None, ptr.def(self), mem_access, extra)
                 .unwrap()
                 .with_type(access_ty)
         });
@@ -1992,13 +2008,17 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
         let (ptr, access_ty) = self.adjust_pointer_for_typed_access(ptr, val.ty);
         let val = self.bitcast(val, access_ty);
 
-        self.emit()
-            .store(
-                ptr.def(self),
-                val.def(self),
+        let (mem_access, extra) = if self.pointer_has_physical_storage_class(ptr) {
+            (
                 Some(MemoryAccess::ALIGNED),
-                std::iter::once(Operand::LiteralBit32(align.bytes() as _)),
+                smallvec::smallvec![Operand::LiteralBit32(align.bytes() as _)] as SmallVec<[_; 1]>,
             )
+        } else {
+            (None, SmallVec::new())
+        };
+
+        self.emit()
+            .store(ptr.def(self), val.def(self), mem_access, extra)
             .unwrap();
         // FIXME(eddyb) this is meant to be a handle the store instruction itself.
         val
@@ -2904,21 +2924,43 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
             }
         });
 
-        // Pass all operands as `additional_params` since rspirv doesn't allow specifying
-        // extra operands ofter the first `MemoryAccess`
+        // `Aligned` only for `PhysicalStorageBuffer` pointers; spec forbids
+        // it on logical. `OpCopyMemory` 1.4+ allows per-side `MemoryAccess`.
+        let dst_physical = self.pointer_has_physical_storage_class(dst);
+        let src_physical = self.pointer_has_physical_storage_class(src);
         let mut ops: SmallVec<[_; 4]> = Default::default();
-        ops.push(Operand::MemoryAccess(MemoryAccess::ALIGNED));
-        if src_align != dst_align {
-            if self.emit().version().unwrap() > (1, 3) {
-                ops.push(Operand::LiteralBit32(dst_align.bytes() as _));
-                ops.push(Operand::MemoryAccess(MemoryAccess::ALIGNED));
-                ops.push(Operand::LiteralBit32(src_align.bytes() as _));
+        if dst_physical || src_physical {
+            if (dst_physical != src_physical || src_align != dst_align)
+                && self.emit().version().unwrap() > (1, 3)
+            {
+                ops.push(Operand::MemoryAccess(if dst_physical {
+                    MemoryAccess::ALIGNED
+                } else {
+                    MemoryAccess::NONE
+                }));
+                if dst_physical {
+                    ops.push(Operand::LiteralBit32(dst_align.bytes() as _));
+                }
+                ops.push(Operand::MemoryAccess(if src_physical {
+                    MemoryAccess::ALIGNED
+                } else {
+                    MemoryAccess::NONE
+                }));
+                if src_physical {
+                    ops.push(Operand::LiteralBit32(src_align.bytes() as _));
+                }
             } else {
-                let align = dst_align.min(src_align);
+                // Both physical with matching alignment (or pre-1.4).
+                ops.push(Operand::MemoryAccess(MemoryAccess::ALIGNED));
+                let align = if dst_physical && src_physical {
+                    dst_align.min(src_align)
+                } else if dst_physical {
+                    dst_align
+                } else {
+                    src_align
+                };
                 ops.push(Operand::LiteralBit32(align.bytes() as _));
             }
-        } else {
-            ops.push(Operand::LiteralBit32(dst_align.bytes() as _));
         }
 
         if let Some((dst, src)) = typed_copy_dst_src {
