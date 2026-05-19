@@ -22,6 +22,12 @@ unsafe impl<T> bytemuck::Zeroable for PhysicalPtr<T> {}
 #[cfg(feature = "bytemuck")]
 unsafe impl<T: 'static> bytemuck::Pod for PhysicalPtr<T> {}
 
+// SAFETY: a `PhysicalPtr<T>` is a GPU device address; the host cannot
+// dereference it, so the aliasing concerns behind `*mut T`'s `!Send`/`!Sync`
+// don't apply. `T` is purely a phantom type tag.
+unsafe impl<T> Send for PhysicalPtr<T> {}
+unsafe impl<T> Sync for PhysicalPtr<T> {}
+
 impl<T> Copy for PhysicalPtr<T> {}
 
 impl<T> Clone for PhysicalPtr<T> {
