@@ -6,6 +6,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod explicit_layout;
 mod fuse_selects;
 mod reduce;
+pub(crate) mod strip_logical_alignment;
 pub(crate) mod validate;
 
 use lazy_static::lazy_static;

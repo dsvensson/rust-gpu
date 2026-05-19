@@ -586,6 +586,12 @@ pub fn link(
         }
 
         {
+            let timer = before_pass("spirt_passes::strip_logical_alignment::strip_when_invalid");
+            spirt_passes::strip_logical_alignment::strip_when_invalid(module);
+            after_pass(Some(module), timer);
+        }
+
+        {
             let timer = before_pass("spirt_passes::validate");
             spirt_passes::validate::validate(module);
             after_pass(Some(module), timer);
