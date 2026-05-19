@@ -451,6 +451,16 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 return;
             }
 
+            // Decorations belong in `module.annotations`, not the function body.
+            Op::Decorate
+            | Op::MemberDecorate
+            | Op::DecorateId
+            | Op::DecorateString
+            | Op::MemberDecorateString => {
+                self.emit_global().module_mut().annotations.push(inst);
+                return;
+            }
+
             op => {
                 // NOTE(eddyb) allowing the instruction to be added below avoids
                 // spurious "`noreturn` requires a terminator at the end" errors.
