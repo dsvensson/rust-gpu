@@ -7,17 +7,22 @@ use core::marker::PhantomData;
 use crate::glam;
 
 /// A physical pointer in the `PhysicalStorageBuffer` storage class
-/// with semantics similar to `*mut T`.
-///
-/// This is similar to a raw pointer retrieved through `u64 as *mut T`, but
-/// provides utilities for pointer manipulation that are currently not
-/// supported on raw pointers due to the otherwise logical addressing model
-/// and 32-bit pointer size.
+/// with semantics similar to `*mut T`. `#[repr(C)]` so host crates can
+/// upload `PhysicalPtr<T>` fields via `bytemuck::cast_slice` (see the
+/// `bytemuck` feature).
+#[repr(C)]
 pub struct PhysicalPtr<T> {
-    // Stored as `UVec2` to avoid depending on the `Int64` SPIR-V capability.
+    // `UVec2` rather than `u64` to avoid the `Int64` SPIR-V capability.
     addr: glam::UVec2,
     _marker: PhantomData<*mut T>,
 }
+
+// SAFETY: `#[repr(C)]`, contains only a `UVec2` and zero-sized `PhantomData`;
+// every bit pattern is a valid pointer (zero ≡ `null()`).
+#[cfg(feature = "bytemuck")]
+unsafe impl<T> bytemuck::Zeroable for PhysicalPtr<T> {}
+#[cfg(feature = "bytemuck")]
+unsafe impl<T: 'static> bytemuck::Pod for PhysicalPtr<T> {}
 
 impl<T> Copy for PhysicalPtr<T> {}
 

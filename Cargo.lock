@@ -1153,7 +1153,9 @@ dependencies = [
  "anyhow",
  "ash",
  "bytemuck",
+ "physical-ptr-shader",
  "spirv-builder",
+ "spirv-std",
 ]
 
 [[package]]
@@ -2788,6 +2790,7 @@ dependencies = [
 name = "physical-ptr-shader"
 version = "0.0.0"
 dependencies = [
+ "bytemuck",
  "spirv-std",
 ]
 
