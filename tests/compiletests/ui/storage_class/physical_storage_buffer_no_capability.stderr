@@ -1,0 +1,39 @@
+error: `u64` type used without `OpCapability Int64`
+   |
+   = note: used by unnamed type
+note: used from within GLCompute entry-point `main`
+  --> <$DIR/physical_storage_buffer_no_capability.rs>:14:5
+   |
+LL |     #[spirv(push_constant)] head_addr: &u64,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: SPIR-V `OpConvertUToPtr` instruction requires one of these capabilities: `Addresses`, `PhysicalStorageBufferAddresses`
+   |
+   = note: used from within `<spirv_std::ptr::PhysicalPtr<u32>>::get`
+note: called by `physical_storage_buffer_no_capability::main`
+  --> <$DIR/physical_storage_buffer_no_capability.rs>:19:21
+   |
+LL |         *out = *ptr.get();
+   |                     ^^^^^
+note: called by GLCompute entry-point `main`
+  --> <$DIR/physical_storage_buffer_no_capability.rs>:13:8
+   |
+LL | pub fn main(
+   |        ^^^^
+
+error: SPIR-V `StorageClass.PhysicalStorageBuffer` operand requires one of these capabilities: `PhysicalStorageBufferAddresses`
+   |
+   = note: used from within `<spirv_std::ptr::PhysicalPtr<u32>>::get`
+note: called by `physical_storage_buffer_no_capability::main`
+  --> <$DIR/physical_storage_buffer_no_capability.rs>:19:21
+   |
+LL |         *out = *ptr.get();
+   |                     ^^^^^
+note: called by GLCompute entry-point `main`
+  --> <$DIR/physical_storage_buffer_no_capability.rs>:13:8
+   |
+LL | pub fn main(
+   |        ^^^^
+
+error: aborting due to 3 previous errors
+
