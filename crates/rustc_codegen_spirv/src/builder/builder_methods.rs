@@ -600,6 +600,21 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         }
     }
 
+    /// Int type for `OpConvertPtrToU`/`OpConvertUToPtr`. Under
+    /// `PhysicalStorageBuffer64` addressing the conversion must be 64-bit
+    /// (VUID-StandaloneSpirv-PhysicalStorageBuffer64-04710); otherwise
+    /// `usize`.
+    fn pointer_to_int_type(&self) -> Word {
+        if self
+            .builder
+            .has_capability(Capability::PhysicalStorageBufferAddresses)
+        {
+            SpirvType::Integer(64, false).def(self.span(), self)
+        } else {
+            self.type_usize()
+        }
+    }
+
     /// True when a `MemoryAccess::Aligned` operand must be attached to a
     /// load/store/copy through `ptr` (only explicitly-physical pointers;
     /// `Inferred` pointers are handled by `strip_logical_alignment` after
@@ -2681,7 +2696,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                                 self.zombie_ptr_equal(result, "OpPtrEqual");
                             })
                     } else {
-                        let int_ty = self.type_usize();
+                        let int_ty = self.pointer_to_int_type();
                         let lhs = self
                             .emit()
                             .convert_ptr_to_u(int_ty, None, lhs.def(self))
@@ -2703,7 +2718,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                                 self.zombie_ptr_equal(result, "OpPtrNotEqual");
                             })
                     } else {
-                        let int_ty = self.type_usize();
+                        let int_ty = self.pointer_to_int_type();
                         let lhs = self
                             .emit()
                             .convert_ptr_to_u(int_ty, None, lhs.def(self))
@@ -2718,7 +2733,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                     }
                 }
                 IntUGT => {
-                    let int_ty = self.type_usize();
+                    let int_ty = self.pointer_to_int_type();
                     let lhs = self
                         .emit()
                         .convert_ptr_to_u(int_ty, None, lhs.def(self))
@@ -2732,7 +2747,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                     self.emit().u_greater_than(b, None, lhs, rhs)
                 }
                 IntUGE => {
-                    let int_ty = self.type_usize();
+                    let int_ty = self.pointer_to_int_type();
                     let lhs = self
                         .emit()
                         .convert_ptr_to_u(int_ty, None, lhs.def(self))
@@ -2746,7 +2761,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                     self.emit().u_greater_than_equal(b, None, lhs, rhs)
                 }
                 IntULT => {
-                    let int_ty = self.type_usize();
+                    let int_ty = self.pointer_to_int_type();
                     let lhs = self
                         .emit()
                         .convert_ptr_to_u(int_ty, None, lhs.def(self))
@@ -2760,7 +2775,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                     self.emit().u_less_than(b, None, lhs, rhs)
                 }
                 IntULE => {
-                    let int_ty = self.type_usize();
+                    let int_ty = self.pointer_to_int_type();
                     let lhs = self
                         .emit()
                         .convert_ptr_to_u(int_ty, None, lhs.def(self))
