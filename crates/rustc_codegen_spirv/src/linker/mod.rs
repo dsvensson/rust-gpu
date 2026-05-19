@@ -299,6 +299,23 @@ pub fn link(
         // jb-todo: strip identical OpDecoration / OpDecorationGroups
     }
 
+    // Promote the merged `OpMemoryModel` to `PhysicalStorageBuffer64` when any
+    // input enables the capability; rspirv otherwise keeps whichever model
+    // the last-linked input carries.
+    {
+        let has_physical_cap = output
+            .capabilities
+            .iter()
+            .any(|inst| matches!(inst.operands.first(), Some(rspirv::dr::Operand::Capability(c)) if *c == rspirv::spirv::Capability::PhysicalStorageBufferAddresses));
+        if has_physical_cap
+            && let Some(mm) = &mut output.memory_model
+            && let Some(rspirv::dr::Operand::AddressingModel(am)) = mm.operands.first_mut()
+            && *am != rspirv::spirv::AddressingModel::PhysicalStorageBuffer64
+        {
+            *am = rspirv::spirv::AddressingModel::PhysicalStorageBuffer64;
+        }
+    }
+
     // find import / export pairs
     {
         let _timer = sess.timer("link_find_pairs");

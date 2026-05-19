@@ -97,6 +97,13 @@ macro_rules! def_spv_spec_with_extra_well_known {
 def_spv_spec_with_extra_well_known! {
     opcode: spv::spec::Opcode = [
         OpTypeVoid,
+        OpTypeInt,
+        OpTypeFloat,
+        OpTypeVector,
+        OpTypeMatrix,
+        OpTypeArray,
+        OpTypeRuntimeArray,
+        OpTypeStruct,
 
         OpConstantComposite,
 
@@ -111,6 +118,7 @@ def_spv_spec_with_extra_well_known! {
         Capability,
         ExecutionModel,
         ImageFormat,
+        LiteralInteger,
         MemoryAccess,
     ],
     decoration: u32 = [

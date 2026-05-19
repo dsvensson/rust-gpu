@@ -85,13 +85,14 @@ impl<T> PhysicalPtr<T> {
 
     /// Gets the address portion of the pointer. All physical pointers are considered to have global provenance.
     pub fn addr(self) -> u64 {
-        unsafe { core::mem::transmute(self.addr) }
+        // Shift/mask (transmute would pull in `Int8`).
+        (self.addr.x as u64) | ((self.addr.y as u64) << 32)
     }
 
     /// Forms a physical pointer from an address. All physical pointers are considered to have global provenance.
     pub fn from_addr(addr: u64) -> Self {
         Self {
-            addr: unsafe { core::mem::transmute(addr) },
+            addr: glam::UVec2::new(addr as u32, (addr >> 32) as u32),
             _marker: PhantomData,
         }
     }
@@ -113,14 +114,18 @@ impl<T> PhysicalPtr<T> {
 }
 
 /// A physical pointer in the `PhysicalStorageBuffer` storage class that the
-/// driver may assume does not alias any other `Restrict`-marked pointer in
-/// the same shader. The pointer value yielded by [`Self::get`] carries the
-/// `Restrict` decoration in the emitted SPIR-V.
+/// caller asserts does not alias any other pointer accessed by the same
+/// shader. The wrapper is a typed marker today; emitting the SPIR-V
+/// `Restrict` decoration on the actual access still requires codegen-level
+/// plumbing because the bitcast result is stored through a Rust local before
+/// being dereferenced and decorations don't propagate through that store/load
+/// pair. Until that lands, the wrapper documents the invariant and lets
+/// consumer APIs require the restrict promise via the type system.
 ///
-/// Use this wherever you would use [`PhysicalPtr`] but can promise the
-/// non-aliasing — the driver can then schedule loads/stores more
-/// aggressively. Aliasing reads or writes through a restricted pointer is
-/// undefined behavior.
+/// # Safety
+/// Aliasing reads or writes through a restricted pointer are undefined
+/// behavior at the driver level once the decoration is emitted; treating the
+/// type as a contract from the start avoids API churn later.
 pub struct RestrictedPhysicalPtr<T> {
     inner: PhysicalPtr<T>,
 }
@@ -140,8 +145,7 @@ impl<T> RestrictedPhysicalPtr<T> {
     /// same shader invocation.
     ///
     /// # Safety
-    /// The non-aliasing contract is the caller's responsibility; violating
-    /// it is undefined behavior at the driver level.
+    /// The non-aliasing contract is the caller's responsibility.
     pub const unsafe fn new(inner: PhysicalPtr<T>) -> Self {
         Self { inner }
     }
@@ -151,21 +155,10 @@ impl<T> RestrictedPhysicalPtr<T> {
         self.inner
     }
 
-    /// Get a mutable pointer to the physical address. The returned pointer
-    /// carries a `Restrict` decoration in the emitted SPIR-V — the same
-    /// aliasing rules that apply to FFI `restrict` pointers apply here.
-    #[crate::macros::gpu_only]
+    /// Get a mutable pointer to the physical address. The address is the same
+    /// as the wrapped [`PhysicalPtr::get`] result; the wrapper's restrict
+    /// promise is documentary today (see the type-level docs).
     pub fn get(self) -> *mut T {
-        let result: *mut T;
-        unsafe {
-            asm!(
-                "%ptr_type = OpTypePointer PhysicalStorageBuffer typeof**{result}",
-                "{result} = OpBitcast %ptr_type {addr}",
-                "OpDecorate {result} Restrict",
-                addr = in(reg) &self.inner.addr,
-                result = out(reg) result,
-            );
-            result
-        }
+        self.inner.get()
     }
 }
