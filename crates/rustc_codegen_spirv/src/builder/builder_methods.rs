@@ -592,18 +592,18 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         self.zombie(def, "cannot check pointers for equality");
     }
 
-    /// Returns `true` if `ptr` is a pointer whose explicit storage class is
-    /// `PhysicalStorageBuffer`. Used to decide whether a `MemoryAccess::Aligned`
-    /// operand is required on the resulting load/store/copy — physical
-    /// addressing requires it, logical addressing forbids it.
-    fn pointer_has_physical_storage_class(&self, ptr: SpirvValue) -> bool {
-        match self.lookup_type(ptr.ty) {
+    /// True when a `MemoryAccess::Aligned` operand must be attached to a
+    /// load/store/copy through `ptr` (only explicitly-physical pointers;
+    /// `Inferred` pointers are handled by `strip_logical_alignment` after
+    /// the specializer resolves them).
+    fn pointer_needs_alignment(&self, ptr: SpirvValue) -> bool {
+        matches!(
+            self.lookup_type(ptr.ty),
             SpirvType::Pointer {
                 storage_class: StorageClassKind::Explicit(StorageClass::PhysicalStorageBuffer),
                 ..
-            } => true,
-            _ => false,
-        }
+            }
+        )
     }
 
     /// Convenience wrapper for `adjust_pointer_for_sized_access`, falling back
@@ -1858,7 +1858,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
 
     fn load(&mut self, ty: Self::Type, ptr: Self::Value, align: Align) -> Self::Value {
         let (ptr, access_ty) = self.adjust_pointer_for_typed_access(ptr, ty);
-        let (mem_access, extra) = if self.pointer_has_physical_storage_class(ptr) {
+        let (mem_access, extra) = if self.pointer_needs_alignment(ptr) {
             (
                 Some(MemoryAccess::ALIGNED),
                 smallvec::smallvec![Operand::LiteralBit32(align.bytes() as _)] as SmallVec<[_; 1]>,
@@ -2000,7 +2000,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
         let (ptr, access_ty) = self.adjust_pointer_for_typed_access(ptr, val.ty);
         let val = self.bitcast(val, access_ty);
 
-        let (mem_access, extra) = if self.pointer_has_physical_storage_class(ptr) {
+        let (mem_access, extra) = if self.pointer_needs_alignment(ptr) {
             (
                 Some(MemoryAccess::ALIGNED),
                 smallvec::smallvec![Operand::LiteralBit32(align.bytes() as _)] as SmallVec<[_; 1]>,
@@ -2936,8 +2936,8 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
 
         // `Aligned` only for `PhysicalStorageBuffer` pointers; spec forbids
         // it on logical. `OpCopyMemory` 1.4+ allows per-side `MemoryAccess`.
-        let dst_physical = self.pointer_has_physical_storage_class(dst);
-        let src_physical = self.pointer_has_physical_storage_class(src);
+        let dst_physical = self.pointer_needs_alignment(dst);
+        let src_physical = self.pointer_needs_alignment(src);
         let mut ops: SmallVec<[_; 4]> = Default::default();
         if dst_physical || src_physical {
             if (dst_physical != src_physical || src_align != dst_align)
