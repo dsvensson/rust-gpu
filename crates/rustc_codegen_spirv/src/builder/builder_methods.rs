@@ -2221,24 +2221,24 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
     }
 
     fn inttoptr(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value {
-        let result_ty = match self.lookup_type(dest_ty) {
-            SpirvType::Pointer { pointee, .. } => SpirvType::Pointer {
-                pointee,
-                storage_class: StorageClassKind::Explicit(StorageClass::PhysicalStorageBuffer),
-            }
-            .def(self.span(), self),
+        // Keep `dest_ty` as-is — forcing `PhysicalStorageBuffer` here would
+        // break rustc-internal float→pointer transmutes (e.g. libm's path).
+        // Use `spirv_std::ptr::PhysicalPtr::get` for an actual physical
+        // pointer.
+        match self.lookup_type(dest_ty) {
+            SpirvType::Pointer { .. } => (),
             other => self.fatal(format!(
                 "inttoptr called on non-pointer dest type: {other:?}"
             )),
-        };
-        if val.ty == result_ty {
+        }
+        if val.ty == dest_ty {
             val
         } else {
             let result = self
                 .emit()
-                .convert_u_to_ptr(result_ty, None, val.def(self))
+                .convert_u_to_ptr(dest_ty, None, val.def(self))
                 .unwrap()
-                .with_type(result_ty);
+                .with_type(dest_ty);
             // Physical storage buffer addressing is assumed to be enabled by
             // the application, so integer→pointer conversion is legal.
             result

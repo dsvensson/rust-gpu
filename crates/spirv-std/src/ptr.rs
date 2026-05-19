@@ -35,12 +35,14 @@ impl<T> PhysicalPtr<T> {
     /// The same aliasing rules that apply to FFI, apply to the returned pointer.
     #[crate::macros::gpu_only]
     pub fn get(self) -> *mut T {
+        // Recombine via shift/mask (transmute would pull in `Int8`).
+        let addr_u64: u64 = (self.addr.x as u64) | ((self.addr.y as u64) << 32);
         let result: *mut T;
         unsafe {
             asm!(
                 "%ptr_type = OpTypePointer PhysicalStorageBuffer typeof**{result}",
-                "{result} = OpBitcast %ptr_type {addr}",
-                addr = in(reg) &self.addr,
+                "{result} = OpConvertUToPtr %ptr_type {addr}",
+                addr = in(reg) addr_u64,
                 result = out(reg) result,
             );
             result
