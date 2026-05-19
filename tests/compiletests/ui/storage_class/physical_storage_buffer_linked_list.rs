@@ -22,13 +22,10 @@ pub fn main(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut f32,
 ) {
     let mut current = *root_node;
-    let mut sum: f32 = 0.0;
-    let mut steps = 0u32;
-    while !current.is_null() && steps < 4096 {
-        let node = unsafe { &*current.get() };
-        sum += node.payload;
+    *output = 0.0;
+    while !current.is_null() {
+        let node = unsafe { current.as_ref_unchecked() };
+        *output += node.payload;
         current = node.next;
-        steps += 1;
     }
-    *output = sum;
 }

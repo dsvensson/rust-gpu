@@ -2184,22 +2184,19 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
     }
 
     fn ptrtoint(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value {
-        // `OpConvertPtrToU` is only valid for pointers in the
-        // `PhysicalStorageBuffer` storage class. Physical storage buffer
-        // addressing is assumed to be enabled by the application, so the
-        // conversion itself is legal SPIR-V — but only if the source pointer
-        // is *actually* in that storage class. We zombie when the source
-        // storage class is anything other than `PhysicalStorageBuffer`, so
-        // logical pointers can't silently leak through `as u64`.
-        let source_is_physical = match self.lookup_type(val.ty) {
-            SpirvType::Pointer { storage_class, .. } => matches!(
-                storage_class,
-                StorageClassKind::Explicit(StorageClass::PhysicalStorageBuffer)
-            ),
+        // `OpConvertPtrToU` is only valid on `PhysicalStorageBuffer`. We
+        // only zombie *explicitly* non-physical sources; `Inferred` is
+        // resolved later by the specializer.
+        let source_storage_class = match self.lookup_type(val.ty) {
+            SpirvType::Pointer { storage_class, .. } => storage_class,
             other => self.fatal(format!(
                 "ptrtoint called on non-pointer source type: {other:?}"
             )),
         };
+        let known_non_physical = matches!(
+            source_storage_class,
+            StorageClassKind::Explicit(sc) if sc != StorageClass::PhysicalStorageBuffer
+        );
         if val.ty == dest_ty {
             val
         } else {
@@ -2208,7 +2205,11 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                 .convert_ptr_to_u(dest_ty, None, val.def(self))
                 .unwrap()
                 .with_type(dest_ty);
-            if !source_is_physical {
+            // Physical storage buffer addressing is assumed to be enabled by
+            // the application, so the conversion itself is legal; only a *known*
+            // non-physical source pointer is rejected (it must be in the
+            // `PhysicalStorageBuffer` storage class).
+            if known_non_physical {
                 self.zombie(
                     result.def(self),
                     "ptrtoint: source pointer must be in `PhysicalStorageBuffer` \
