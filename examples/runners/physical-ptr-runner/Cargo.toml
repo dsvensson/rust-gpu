@@ -1,0 +1,25 @@
+[package]
+name = "example-runner-physical-ptr"
+version = "0.0.0"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["use-compiled-tools"]
+use-installed-tools = ["spirv-builder/use-installed-tools"]
+use-compiled-tools = ["spirv-builder/use-compiled-tools"]
+
+[dependencies]
+ash = "0.38"
+anyhow = "1.0.98"
+bytemuck.workspace = true
+spirv-builder = { workspace = true, default-features = false }
+
+[package.metadata.release]
+release = false

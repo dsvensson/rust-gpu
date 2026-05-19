@@ -1131,6 +1131,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-runner-physical-ptr"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "ash",
+ "bytemuck",
+ "spirv-builder",
+]
+
+[[package]]
 name = "example-runner-wgpu"
 version = "0.0.0"
 dependencies = [

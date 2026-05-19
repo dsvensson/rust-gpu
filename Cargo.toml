@@ -8,6 +8,7 @@ resolver = "2"
 members = [
     "examples/runners/cpu",
     "examples/runners/ash",
+    "examples/runners/physical-ptr-runner",
     "examples/runners/wgpu",
     "examples/runners/wgpu/builder",
     "examples/shaders/reduce",
