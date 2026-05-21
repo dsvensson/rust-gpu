@@ -224,6 +224,7 @@ macro_rules! ray_query {
         $crate::ray_query!(@inner $name, mut)
     };
     (@inner $name:ident $(, $mut:tt)?) => {
+        #[cfg(target_arch = "spirv")]
         let $name: &$($mut)? RayQuery = unsafe {
             let $name : *mut RayQuery;
             ::core::arch::asm! {
@@ -234,6 +235,18 @@ macro_rules! ray_query {
             }
 
             &$($mut)? *$name
+        };
+        // Host stub: the let initializer must have a non-`!` return type so
+        // that subsequent code in the caller stays reachable. A direct
+        // `unimplemented!()` here is of type `!`, which marks the rest of
+        // the function as unreachable and triggers `unreachable_code` /
+        // `unused_variables` lints at every call site.
+        #[cfg(not(target_arch = "spirv"))]
+        let $name: &$($mut)? RayQuery = {
+            fn host_stub<T>() -> T {
+                unimplemented!("`ray_query!` is only available on SPIR-V platforms.")
+            }
+            host_stub()
         };
     }
 }
