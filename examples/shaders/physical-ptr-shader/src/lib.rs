@@ -1,6 +1,8 @@
 //! Compute shader that sums a `PhysicalStorageBuffer`-backed linked list.
-//! The host pushes the head address as a [`PhysicalPtr<Node>`] push
-//! constant; the shader chases `next` until null. See
+//! The host pushes the head address and an output address (both physical
+//! pointers) as a push constant; the shader chases `next` until null and
+//! writes the `f16` sum through the output pointer. The host deliberately
+//! places that output above 4 GiB to exercise 64-bit addressing. See
 //! `examples/runners/physical-ptr-runner` for the live-fire dispatcher.
 
 #![cfg_attr(target_arch = "spirv", no_std)]
@@ -23,17 +25,26 @@ pub struct Node {
     pub payload: f16,
 }
 
+/// Push-constant parameters: the head of the list and where to write the sum,
+/// both as physical (device-address) pointers.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct Params {
+    pub root: PhysicalPtr<Node>,
+    pub output: PhysicalPtr<f16>,
+}
+
 #[spirv(compute(threads(1)))]
-pub fn main(
-    #[spirv(push_constant)] root_node: &PhysicalPtr<Node>,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut f16,
-) {
-    let mut current = *root_node;
-    *output = 0.0;
+pub fn main(#[spirv(push_constant)] params: &Params) {
+    let mut current = params.root;
+    let mut sum = 0.0f16;
     unsafe {
         while let Some(node) = current.as_ref() {
-            *output += node.payload;
+            sum += node.payload;
             current = node.next;
         }
+        // Store the result through the physical output pointer (a >4 GiB
+        // device address), exercising a 64-bit `OpConvertUToPtr` + store.
+        *params.output.get() = sum;
     }
 }

@@ -1,8 +1,10 @@
 //! Raw-Vulkan compute runner for the `physical-ptr-shader` linked-list-sum
 //! shader. Builds the SPIR-V, creates a Vulkan 1.2 device with
 //! `bufferDeviceAddress`, writes a linked list whose `next` fields hold
-//! `vkGetBufferDeviceAddress` results, pushes the head address as a push
-//! constant, and checks the GPU sum against a CPU reference.
+//! `vkGetBufferDeviceAddress` results, and pushes the head address plus an
+//! output address (both physical pointers) as push constants. The output is
+//! deliberately placed *above* 4 GiB so the shader's store exercises 64-bit
+//! addressing; the result is read back and checked against a CPU reference.
 
 #![feature(f16)]
 
@@ -18,6 +20,10 @@ use std::path::PathBuf;
 
 const NODE_COUNT: usize = 8;
 const PAYLOADS: [f32; NODE_COUNT] = [1.0, 2.5, 3.0, 4.5, 5.0, 6.5, 7.0, 8.5];
+
+/// Byte offset at which the 2-byte output buffer is bound inside its (larger
+/// than 4 GiB) allocation, forcing its device address above 4 GiB.
+const HIGH_OFFSET: u64 = 4 * 1024 * 1024 * 1024; // 0x1_0000_0000
 
 fn main() -> Result<()> {
     let spv_words = compile_shader()?;
@@ -126,9 +132,7 @@ unsafe fn dispatch(spv_words: &[u32], cpu_sum: f16) -> Result<()> { unsafe {
     let node_size = size_of::<Node>() as u64;
     let nodes_size = node_size * NODE_COUNT as u64;
     let (nodes_buf, nodes_mem) = create_buffer(
-        &instance,
         &device,
-        physical_device,
         &mem_props,
         nodes_size,
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
@@ -153,68 +157,65 @@ unsafe fn dispatch(spv_words: &[u32], cpu_sum: f16) -> Result<()> { unsafe {
     std::ptr::copy_nonoverlapping(nodes.as_ptr(), mapped.cast(), nodes.len());
     device.unmap_memory(nodes_mem);
 
-    // ── Output buffer (storage, host-visible for readback) ─────────────
-    // Single `f16` result (2 bytes).
-    let output_size = 2u64;
-    let (output_buf, output_mem) = create_buffer(
-        &instance,
-        &device,
-        physical_device,
+    // ── Output: a single `f16` placed ABOVE 4 GiB ──────────────────────
+    // Reserve just over 4 GiB and bind the 2-byte output buffer at offset
+    // 4 GiB; its device address is then `allocation_base + 4 GiB`, which is
+    // guaranteed to have a non-zero high dword regardless of where the driver
+    // placed the allocation. The shader writes the sum through this address.
+    let output_buf = device.create_buffer(
+        &vk::BufferCreateInfo::default()
+            .size(2)
+            .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE),
+        None,
+    )?;
+    let out_req = device.get_buffer_memory_requirements(output_buf);
+    let out_alloc_size = HIGH_OFFSET + out_req.size;
+    let out_mem_type = find_memory_type_with_heap(
         &mem_props,
-        output_size,
-        vk::BufferUsageFlags::STORAGE_BUFFER,
+        out_req.memory_type_bits,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        false,
-    )?;
-
-    // ── Descriptor set: one storage_buffer (binding 0 = output) ────────
-    let descriptor_pool = device.create_descriptor_pool(
-        &vk::DescriptorPoolCreateInfo::default()
-            .max_sets(1)
-            .pool_sizes(&[vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::STORAGE_BUFFER,
-                descriptor_count: 1,
-            }]),
-        None,
-    )?;
-    let dsl = device.create_descriptor_set_layout(
-        &vk::DescriptorSetLayoutCreateInfo::default().bindings(&[
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(0)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        ]),
-        None,
-    )?;
-    let dsl_arr = [dsl];
-    let descriptor_sets = device.allocate_descriptor_sets(
-        &vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(&dsl_arr),
-    )?;
-    let output_info = [vk::DescriptorBufferInfo::default()
-        .buffer(output_buf)
-        .offset(0)
-        .range(output_size)];
-    device.update_descriptor_sets(
-        &[vk::WriteDescriptorSet::default()
-            .dst_set(descriptor_sets[0])
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&output_info)],
-        &[],
+        out_alloc_size,
+    )
+    .ok_or_else(|| {
+        anyhow!(
+            "no host-visible memory type with a heap ≥ {out_alloc_size} bytes \
+             (need >4 GiB — enable Resizable BAR or ensure enough system RAM)"
+        )
+    })?;
+    let mut out_alloc_flags =
+        vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+    let output_mem = device
+        .allocate_memory(
+            &vk::MemoryAllocateInfo::default()
+                .allocation_size(out_alloc_size)
+                .memory_type_index(out_mem_type)
+                .push_next(&mut out_alloc_flags),
+            None,
+        )
+        .context("allocating >4 GiB for the output buffer")?;
+    device
+        .bind_buffer_memory(output_buf, output_mem, HIGH_OFFSET)
+        .context("binding output buffer at the 4 GiB offset")?;
+    let output_addr =
+        device.get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(output_buf));
+    println!("Nodes buffer  @ {nodes_base_addr:#018x}");
+    println!(
+        "Output buffer @ {output_addr:#018x}  (high 32 bits = {:#x})",
+        output_addr >> 32
+    );
+    assert!(
+        output_addr >> 32 != 0,
+        "output address {output_addr:#x} is not above 4 GiB"
     );
 
-    // ── Pipeline ────────────────────────────────────────────────────────
+    // ── Pipeline (push constants only: two 8-byte physical addresses) ──
     let push_range = [vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
-        .size(8)];
+        .size(16)];
     let pipeline_layout = device.create_pipeline_layout(
-        &vk::PipelineLayoutCreateInfo::default()
-            .set_layouts(&dsl_arr)
-            .push_constant_ranges(&push_range),
+        &vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_range),
         None,
     )?;
 
@@ -258,21 +259,17 @@ unsafe fn dispatch(spv_words: &[u32], cpu_sum: f16) -> Result<()> { unsafe {
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
     )?;
     device.cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::COMPUTE, pipeline);
-    device.cmd_bind_descriptor_sets(
-        cmd_buf,
-        vk::PipelineBindPoint::COMPUTE,
-        pipeline_layout,
-        0,
-        &descriptor_sets,
-        &[],
-    );
-    // Push the head address.
+    // Push the head address (bytes 0..8) and the output address (bytes 8..16),
+    // matching the shader's `Params { root, output }` push-constant layout.
+    let mut push = [0u8; 16];
+    push[0..8].copy_from_slice(&nodes_base_addr.to_le_bytes());
+    push[8..16].copy_from_slice(&output_addr.to_le_bytes());
     device.cmd_push_constants(
         cmd_buf,
         pipeline_layout,
         vk::ShaderStageFlags::COMPUTE,
         0,
-        &nodes_base_addr.to_le_bytes(),
+        &push,
     );
     device.cmd_dispatch(cmd_buf, 1, 1, 1);
     device.end_command_buffer(cmd_buf)?;
@@ -284,8 +281,8 @@ unsafe fn dispatch(spv_words: &[u32], cpu_sum: f16) -> Result<()> { unsafe {
     device.queue_submit(queue, &submits, fence)?;
     device.wait_for_fences(&[fence], true, u64::MAX)?;
 
-    // ── Read back (single `f16`) ───────────────────────────────────────
-    let mapped = device.map_memory(output_mem, 0, output_size, vk::MemoryMapFlags::empty())?;
+    // ── Read back (single `f16` at the >4 GiB offset) ──────────────────
+    let mapped = device.map_memory(output_mem, HIGH_OFFSET, 2, vk::MemoryMapFlags::empty())?;
     let mut bytes = [0u8; 2];
     std::ptr::copy_nonoverlapping(mapped.cast::<u8>(), bytes.as_mut_ptr(), 2);
     device.unmap_memory(output_mem);
@@ -296,7 +293,7 @@ unsafe fn dispatch(spv_words: &[u32], cpu_sum: f16) -> Result<()> { unsafe {
     println!(
         "{}",
         if ok {
-            "PASS: GPU matches CPU reference."
+            "PASS: GPU matches CPU reference (written above 4 GiB)."
         } else {
             "FAIL: GPU and CPU disagree."
         }
@@ -308,8 +305,6 @@ unsafe fn dispatch(spv_words: &[u32], cpu_sum: f16) -> Result<()> { unsafe {
     device.destroy_pipeline(pipeline, None);
     device.destroy_shader_module(shader_module, None);
     device.destroy_pipeline_layout(pipeline_layout, None);
-    device.destroy_descriptor_set_layout(dsl, None);
-    device.destroy_descriptor_pool(descriptor_pool, None);
     device.destroy_buffer(output_buf, None);
     device.free_memory(output_mem, None);
     device.destroy_buffer(nodes_buf, None);
@@ -320,13 +315,11 @@ unsafe fn dispatch(spv_words: &[u32], cpu_sum: f16) -> Result<()> { unsafe {
     if ok { Ok(()) } else { Err(anyhow!("verification failed")) }
 }}
 
-/// Wraps `create_buffer` + `allocate_memory` + `bind_buffer_memory`. When
-/// `device_address` is set, `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT` is
-/// passed so the buffer can be queried via `vkGetBufferDeviceAddress`.
+/// Creates a buffer, allocates memory for it, and binds it at offset 0. When
+/// `device_address` is set, `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT` is passed
+/// so the buffer can be queried via `vkGetBufferDeviceAddress`.
 unsafe fn create_buffer(
-    _instance: &ash::Instance,
     device: &ash::Device,
-    _physical_device: vk::PhysicalDevice,
     mem_props: &vk::PhysicalDeviceMemoryProperties,
     size: u64,
     usage: vk::BufferUsageFlags,
@@ -341,7 +334,7 @@ unsafe fn create_buffer(
         None,
     )?;
     let mem_req = device.get_buffer_memory_requirements(buf);
-    let mem_type = find_memory_type(mem_props, mem_req.memory_type_bits, required_flags)
+    let mem_type = find_memory_type_with_heap(mem_props, mem_req.memory_type_bits, required_flags, 0)
         .ok_or_else(|| anyhow!("no memory type with required flags"))?;
 
     let mut alloc_info = vk::MemoryAllocateInfo::default()
@@ -357,15 +350,18 @@ unsafe fn create_buffer(
     Ok((buf, mem))
 }}
 
-fn find_memory_type(
+/// Finds a memory type satisfying `type_bits` and `required` flags whose heap
+/// is at least `min_heap_size` bytes (pass 0 to ignore heap size).
+fn find_memory_type_with_heap(
     mem_props: &vk::PhysicalDeviceMemoryProperties,
     type_bits: u32,
     required: vk::MemoryPropertyFlags,
+    min_heap_size: u64,
 ) -> Option<u32> {
     (0..mem_props.memory_type_count).find(|&i| {
+        let ty = mem_props.memory_types[i as usize];
         type_bits & (1 << i) != 0
-            && mem_props.memory_types[i as usize]
-                .property_flags
-                .contains(required)
+            && ty.property_flags.contains(required)
+            && mem_props.memory_heaps[ty.heap_index as usize].size >= min_heap_size
     })
 }
