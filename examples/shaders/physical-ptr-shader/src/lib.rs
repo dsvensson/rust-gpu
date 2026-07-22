@@ -4,27 +4,29 @@
 //! `examples/runners/physical-ptr-runner` for the live-fire dispatcher.
 
 #![cfg_attr(target_arch = "spirv", no_std)]
+#![feature(f16)]
 // HACK(eddyb) can't easily see warnings otherwise from `spirv-builder` builds.
 #![deny(warnings)]
 
-use bytemuck::{Pod, Zeroable};
 use spirv_std::ptr::PhysicalPtr;
 use spirv_std::spirv;
 
-/// Recursive linked-list node accessed through a physical pointer. `Pod`
-/// so a CPU host can build a `Vec<Node>` and upload it via
-/// `bytemuck::cast_slice`.
+/// Recursive linked-list node accessed through a physical pointer. `#[repr(C)]`
+/// so the CPU host and the GPU agree on the layout; the host builds a
+/// `Vec<Node>` and uploads the raw bytes. `PhysicalPtr` (8 bytes) + `f16`
+/// (2 bytes) leaves 2 bytes of implicit tail padding — that's fine here (the
+/// GPU never reads it), which is why `Node` isn't `bytemuck::Pod`.
 #[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
+#[derive(Copy, Clone)]
 pub struct Node {
     pub next: PhysicalPtr<Node>,
-    pub payload: f32,
+    pub payload: f16,
 }
 
 #[spirv(compute(threads(1)))]
 pub fn main(
     #[spirv(push_constant)] root_node: &PhysicalPtr<Node>,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut f32,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut f16,
 ) {
     let mut current = *root_node;
     *output = 0.0;

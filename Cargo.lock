@@ -2790,7 +2790,6 @@ dependencies = [
 name = "physical-ptr-shader"
 version = "0.0.0"
 dependencies = [
- "bytemuck",
  "spirv-std",
 ]
 

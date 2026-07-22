@@ -4,6 +4,8 @@
 //! `vkGetBufferDeviceAddress` results, pushes the head address as a push
 //! constant, and checks the GPU sum against a CPU reference.
 
+#![feature(f16)]
+
 use anyhow::{Context, Result, anyhow};
 use ash::util::read_spv;
 use ash::{Entry, vk};
@@ -21,8 +23,10 @@ fn main() -> Result<()> {
     let spv_words = compile_shader()?;
     println!("Built shader: {} SPIR-V words", spv_words.len());
 
-    let cpu_sum: f32 = PAYLOADS.iter().sum();
-    println!("CPU reference sum = {cpu_sum}");
+    // Mirror the shader's `f16` accumulation (payload stored + summed as `f16`)
+    // so the reference matches the GPU result bit-for-bit.
+    let cpu_sum: f16 = PAYLOADS.iter().fold(0.0, |acc, &p| acc + p as f16);
+    println!("CPU reference sum = {}", cpu_sum as f32);
 
     unsafe { dispatch(&spv_words, cpu_sum) }
 }
@@ -36,13 +40,14 @@ fn compile_shader() -> Result<Vec<u32>> {
     let compile_result = SpirvBuilder::new(crate_path, "spirv-unknown-vulkan1.2")
         .capability(Capability::PhysicalStorageBufferAddresses)
         .capability(Capability::Int64)
+        .capability(Capability::Float16)
         .extension("SPV_KHR_physical_storage_buffer")
         .build()?;
     let spv_path = compile_result.module.unwrap_single();
     Ok(read_spv(&mut File::open(spv_path)?)?)
 }
 
-unsafe fn dispatch(spv_words: &[u32], cpu_sum: f32) -> Result<()> { unsafe {
+unsafe fn dispatch(spv_words: &[u32], cpu_sum: f16) -> Result<()> { unsafe {
     let entry = Entry::load()?;
 
     // ── Instance ────────────────────────────────────────────────────────
@@ -92,17 +97,24 @@ unsafe fn dispatch(spv_words: &[u32], cpu_sum: f32) -> Result<()> { unsafe {
 
     // `shaderInt64` for `PhysicalPtr`'s u64 unpacking; `bufferDeviceAddress`
     // for `vkGetBufferDeviceAddress`; `vulkanMemoryModel` because
-    // `rustc_codegen_spirv` declares it in the emitted SPIR-V.
+    // `rustc_codegen_spirv` declares it in the emitted SPIR-V; `shaderFloat16`
+    // for the `f16` payload/sum.
     let core_feat = vk::PhysicalDeviceFeatures::default().shader_int64(true);
+    // `storageBuffer16BitAccess` for the `f16` values in the storage/physical
+    // buffers.
+    let mut vk11_feat =
+        vk::PhysicalDeviceVulkan11Features::default().storage_buffer16_bit_access(true);
     let mut vk12_feat = vk::PhysicalDeviceVulkan12Features::default()
         .buffer_device_address(true)
-        .vulkan_memory_model(true);
+        .vulkan_memory_model(true)
+        .shader_float16(true);
     let device_extensions: &[*const c_char] = &[];
 
     let device_create = vk::DeviceCreateInfo::default()
         .queue_create_infos(&queue_create)
         .enabled_features(&core_feat)
         .enabled_extension_names(device_extensions)
+        .push_next(&mut vk11_feat)
         .push_next(&mut vk12_feat);
 
     let device = instance.create_device(physical_device, &device_create, None)?;
@@ -134,7 +146,7 @@ unsafe fn dispatch(spv_words: &[u32], cpu_sum: f32) -> Result<()> { unsafe {
             } else {
                 PhysicalPtr::<Node>::null()
             },
-            payload: PAYLOADS[i],
+            payload: PAYLOADS[i] as f16,
         })
         .collect();
     let mapped = device.map_memory(nodes_mem, 0, nodes_size, vk::MemoryMapFlags::empty())?;
@@ -142,7 +154,8 @@ unsafe fn dispatch(spv_words: &[u32], cpu_sum: f32) -> Result<()> { unsafe {
     device.unmap_memory(nodes_mem);
 
     // ── Output buffer (storage, host-visible for readback) ─────────────
-    let output_size = 4u64;
+    // Single `f16` result (2 bytes).
+    let output_size = 2u64;
     let (output_buf, output_mem) = create_buffer(
         &instance,
         &device,
@@ -271,15 +284,15 @@ unsafe fn dispatch(spv_words: &[u32], cpu_sum: f32) -> Result<()> { unsafe {
     device.queue_submit(queue, &submits, fence)?;
     device.wait_for_fences(&[fence], true, u64::MAX)?;
 
-    // ── Read back ──────────────────────────────────────────────────────
+    // ── Read back (single `f16`) ───────────────────────────────────────
     let mapped = device.map_memory(output_mem, 0, output_size, vk::MemoryMapFlags::empty())?;
-    let mut bytes = [0u8; 4];
-    std::ptr::copy_nonoverlapping(mapped.cast::<u8>(), bytes.as_mut_ptr(), 4);
+    let mut bytes = [0u8; 2];
+    std::ptr::copy_nonoverlapping(mapped.cast::<u8>(), bytes.as_mut_ptr(), 2);
     device.unmap_memory(output_mem);
-    let gpu_sum = f32::from_le_bytes(bytes);
-    println!("GPU sum = {gpu_sum}");
+    let gpu_sum = f16::from_bits(u16::from_le_bytes(bytes));
+    println!("GPU sum = {}", gpu_sum as f32);
 
-    let ok = (gpu_sum - cpu_sum).abs() < 1e-4;
+    let ok = (gpu_sum as f32 - cpu_sum as f32).abs() < 1e-2;
     println!(
         "{}",
         if ok {
