@@ -1520,6 +1520,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-runner-physical-ptr"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "ash",
+ "physical-ptr-shader",
+ "spirv-builder",
+ "spirv-std",
+]
+
+[[package]]
 name = "example-runner-wgpu"
 version = "0.0.0"
 dependencies = [
@@ -4556,6 +4567,13 @@ dependencies = [
  "fixedbitset",
  "hashbrown 0.15.5",
  "indexmap",
+]
+
+[[package]]
+name = "physical-ptr-shader"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
 ]
 
 [[package]]

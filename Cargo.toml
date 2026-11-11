@@ -10,11 +10,13 @@ members = [
     "examples/runners/ash",
     "examples/runners/wgpu",
     "examples/runners/wgpu/builder",
+    "examples/runners/physical-ptr",
     "examples/shaders/reduce",
     "examples/shaders/sky-shader",
     "examples/shaders/simplest-shader",
     "examples/shaders/compute-shader",
     "examples/shaders/mouse-shader",
+    "examples/shaders/physical-ptr-shader",
     "examples/multibuilder",
     "examples/run-wasm",
 
