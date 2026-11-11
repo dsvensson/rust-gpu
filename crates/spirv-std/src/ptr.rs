@@ -39,14 +39,18 @@
 //!   to non-physical memory (e.g. `if c { p.as_ref_unchecked() } else { &local }`):
 //!   storage classes are inferred per pointer, so compilation fails with an
 //!   "inference conflict" between the two.
-//! - There are no null physical references, and `Option<&T>` won't work for them; test
-//!   [`PhysicalPtr::is_null`] instead.
+//! - There are no null physical references, and `Option<&T>` won't work for them; use
+//!   [`PhysicalPtr::as_ref`] or [`PhysicalPtr::as_mut`] instead, or test
+//!   [`PhysicalPtr::is_null`].
 //! - Pointer arithmetic and casts on the raw pointer from [`PhysicalPtr::as_ptr`] aren't
 //!   supported; do them on the `PhysicalPtr`.
 #[cfg(target_arch = "spirv")]
 use core::arch::asm;
 use core::fmt;
 use core::marker::PhantomData;
+use core::mem;
+use core::num::NonZeroU64;
+use core::ops::{Deref, DerefMut};
 
 /// The address of a `T` in `PhysicalStorageBuffer` memory, laid out like a `u64` (`VkDeviceAddress`).
 ///
@@ -153,6 +157,31 @@ impl<T> PhysicalPtr<T> {
     pub unsafe fn as_mut_unchecked<'a>(self) -> &'a mut T {
         unsafe { &mut *self.as_ptr() }
     }
+
+    /// Returns `None` if the address is `0`, or else a handle that dereferences to the `T`
+    /// at the address.
+    ///
+    /// # Safety
+    /// A non-zero address must meet the requirements of
+    /// [`as_ref_unchecked`](Self::as_ref_unchecked).
+    #[inline]
+    pub unsafe fn as_ref<'a>(self) -> Option<PhysicalRef<'a, T>> {
+        // SAFETY: `Option` of a `repr(transparent)` `NonZeroU64` is a `u64` with `0` for `None`.
+        // (`NonZeroU64::new(addr).map(…)` would emit a second null check.)
+        unsafe { mem::transmute::<u64, Option<PhysicalRef<'a, T>>>(self.addr) }
+    }
+
+    /// Returns `None` if the address is `0`, or else a handle that mutably dereferences to
+    /// the `T` at the address.
+    ///
+    /// # Safety
+    /// A non-zero address must meet the requirements of
+    /// [`as_mut_unchecked`](Self::as_mut_unchecked).
+    #[inline]
+    pub unsafe fn as_mut<'a>(self) -> Option<PhysicalMut<'a, T>> {
+        // SAFETY: as in `as_ref`.
+        unsafe { mem::transmute::<u64, Option<PhysicalMut<'a, T>>>(self.addr) }
+    }
 }
 
 // Written by hand, as `#[derive]` would require the same traits of `T`.
@@ -196,14 +225,74 @@ unsafe impl<T> bytemuck::Zeroable for PhysicalPtr<T> {}
 #[cfg(feature = "bytemuck")]
 unsafe impl<T: 'static> bytemuck::Pod for PhysicalPtr<T> {}
 
+/// A non-null [`PhysicalPtr`] that dereferences to the `T`, returned by [`PhysicalPtr::as_ref`].
+///
+/// It exists because the `None` of `Option<&T>` is a null pointer, which SPIR-V doesn't allow
+/// for `PhysicalStorageBuffer` pointers, while the `None` of `Option<PhysicalRef<T>>` is the
+/// address `0`.
+#[repr(transparent)]
+pub struct PhysicalRef<'a, T> {
+    addr: NonZeroU64,
+    _marker: PhantomData<&'a T>,
+}
+
+impl<T> Clone for PhysicalRef<'_, T> {
+    #[inline]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for PhysicalRef<'_, T> {}
+
+impl<T> Deref for PhysicalRef<'_, T> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &T {
+        // SAFETY: guaranteed by the caller of `PhysicalPtr::as_ref`.
+        unsafe { PhysicalPtr::from_addr(self.addr.get()).as_ref_unchecked() }
+    }
+}
+
+/// A non-null [`PhysicalPtr`] that mutably dereferences to the `T`, returned by
+/// [`PhysicalPtr::as_mut`].
+///
+/// It exists instead of `Option<&mut T>` for the same reason as [`PhysicalRef`].
+#[repr(transparent)]
+pub struct PhysicalMut<'a, T> {
+    addr: NonZeroU64,
+    _marker: PhantomData<&'a mut T>,
+}
+
+impl<T> Deref for PhysicalMut<'_, T> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &T {
+        // SAFETY: guaranteed by the caller of `PhysicalPtr::as_mut`.
+        unsafe { PhysicalPtr::from_addr(self.addr.get()).as_ref_unchecked() }
+    }
+}
+
+impl<T> DerefMut for PhysicalMut<'_, T> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: guaranteed by the caller of `PhysicalPtr::as_mut`.
+        unsafe { PhysicalPtr::from_addr(self.addr.get()).as_mut_unchecked() }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::PhysicalPtr;
+    use super::{PhysicalMut, PhysicalPtr, PhysicalRef};
 
     #[test]
     fn layout() {
         assert_eq!(size_of::<PhysicalPtr<u8>>(), size_of::<u64>());
         assert_eq!(align_of::<PhysicalPtr<u8>>(), align_of::<u64>());
+        assert_eq!(size_of::<Option<PhysicalRef<'_, u32>>>(), 8);
+        assert_eq!(size_of::<Option<PhysicalMut<'_, u32>>>(), 8);
     }
 
     #[test]
@@ -211,6 +300,17 @@ mod tests {
         assert!(PhysicalPtr::<u32>::null().is_null());
         assert!(PhysicalPtr::<u32>::default().is_null());
         assert!(!PhysicalPtr::<u32>::from_addr(4).is_null());
+    }
+
+    #[test]
+    fn as_ref_as_mut() {
+        // Only checks for null, as dereferencing needs a GPU.
+        unsafe {
+            assert!(PhysicalPtr::<u32>::null().as_ref().is_none());
+            assert!(PhysicalPtr::<u32>::null().as_mut().is_none());
+            assert!(PhysicalPtr::<u32>::from_addr(4).as_ref().is_some());
+            assert!(PhysicalPtr::<u32>::from_addr(4).as_mut().is_some());
+        }
     }
 
     #[test]

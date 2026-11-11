@@ -1,0 +1,81 @@
+          %1 = OpFunction %2 None %3
+          %4 = OpLabel
+          %6 = OpInBoundsAccessChain %7 %8 %9
+         %10 = OpInBoundsAccessChain %11 %6 %9
+         %12 = OpLoad %13 %10
+               OpNoLine
+               OpBranch %14
+         %14 = OpLabel
+         %15 = OpPhi %13 %12 %4 %16 %17
+         %18 = OpPhi %19 %9 %4 %20 %17
+         %21 = OpPhi %19 %9 %4 %22 %17
+               OpLoopMerge %23 %17 None
+               OpBranch %24
+         %24 = OpLabel
+         %25 = OpIEqual %26 %15 %27
+         %28 = OpSelect %29 %25 %30 %31
+         %32 = OpINotEqual %26 %28 %30
+               OpNoLine
+               OpSelectionMerge %33 None
+               OpBranchConditional %32 %34 %35
+         %34 = OpLabel
+         %36 = OpIAdd %19 %21 %37
+         %39 = OpConvertUToPtr %40 %15
+         %41 = OpInBoundsAccessChain %42 %39 %37
+         %43 = OpLoad %19 %41 Aligned 4
+         %44 = OpIAdd %19 %18 %43
+         %45 = OpConvertUToPtr %40 %15
+         %46 = OpInBoundsAccessChain %47 %45 %9
+         %48 = OpLoad %13 %46 Aligned 8
+               OpNoLine
+               OpBranch %33
+         %35 = OpLabel
+               OpBranch %33
+         %33 = OpLabel
+         %16 = OpPhi %13 %48 %34 %49 %35
+         %20 = OpPhi %19 %44 %34 %50 %35
+         %22 = OpPhi %19 %36 %34 %50 %35
+               OpBranch %17
+         %17 = OpLabel
+               OpBranchConditional %32 %14 %23
+         %23 = OpLabel
+         %51 = OpInBoundsAccessChain %11 %6 %37
+         %52 = OpLoad %13 %51
+         %53 = OpIEqual %26 %52 %27
+         %54 = OpSelect %29 %53 %30 %31
+         %55 = OpINotEqual %26 %54 %30
+               OpNoLine
+               OpSelectionMerge %56 None
+               OpBranchConditional %55 %57 %58
+         %57 = OpLabel
+         %59 = OpConvertUToPtr %60 %52
+         %61 = OpInBoundsAccessChain %42 %59 %9
+               OpStore %61 %21 Aligned 4
+         %62 = OpConvertUToPtr %60 %52
+         %63 = OpInBoundsAccessChain %42 %62 %37
+               OpStore %63 %18 Aligned 4
+               OpNoLine
+               OpBranch %56
+         %58 = OpLabel
+               OpBranch %56
+         %56 = OpLabel
+         %64 = OpInBoundsAccessChain %11 %6 %65
+         %66 = OpLoad %13 %64
+         %67 = OpIEqual %26 %66 %27
+         %68 = OpSelect %29 %67 %30 %31
+         %69 = OpINotEqual %26 %68 %30
+               OpNoLine
+               OpSelectionMerge %70 None
+               OpBranchConditional %69 %71 %72
+         %71 = OpLabel
+         %73 = OpConvertUToPtr %42 %66
+         %74 = OpLoad %19 %73 Aligned 4
+         %75 = OpIAdd %19 %74 %18
+               OpStore %73 %75 Aligned 4
+               OpNoLine
+               OpBranch %70
+         %72 = OpLabel
+               OpBranch %70
+         %70 = OpLabel
+               OpReturn
+               OpFunctionEnd
